@@ -1,0 +1,40 @@
+======================================================================
+🌱 Climate & Green Tech Job Finder
+======================================================================
+
+Roles to search: Product Owner
+Location: Switzerland
+Results will be saved/appended to: jobs.csv
+
+======================================================================
+
+🔍 Searching for: Product Owner
+   Location: Switzerland
+--------------------------------------------------
+   Searching for 'product owner' jobs in Switzerland
+   Adzuna URL: https://api.adzuna.com/v1/api/jobs/ch/search/1 Params: {'app_id': '7f2b060d', 'app_key': '3a1a8c490a8463868ffa897cd3bd9d7c', 'what': 'product owner', 'results_per_page': 50, 'content-type': 'application/json', 'where': 'Switzerland'}
+   Arbeitnow: Found 2 matching jobs
+   RemoteOK: Found 0 matching jobs
+   Adzuna: Found 0 jobs
+   Found 2 unique jobs, validating with LLM (in batches)...
+   Validating batch 1/1...
+   Final: 1 relevant jobs (1 with climate score >= 2)
+I found a job that matched your criteria, but please note that it is not based in Switzerland but in Munich, Germany. Here's the opportunity:
+
+### Product Owner Job
+- **Title:** Product Lead- Identity & Access Management (IAM) (f/m/d)
+- **Company:** Apaleo
+- **Location:** Munich, Bavaria, Germany
+- **Salary:** Not listed
+- **Posted Date:** Recent
+- **WFH Policy:** On-site
+- **Climate Score:** 2
+- **Source:** Arbeitnow
+- **Job Description:** Apaleo is an open, API-first property management platform for the hospitality industry, with a focus on customizing tech stacks and automating operations. Although not primarily a climate-focused role, there might be initiatives related to sustainability.
+- **[Job Link](https://www.arbeitnow.com/jobs/companies/apaleo/product-lead-identity-access-management-iam-munchen-286111)**
+
+While this specific role isn't fundamentally climate-focused, it appears there might be some relevance to sustainability within the company's operations.
+
+======================================================================
+✅ All searches complete! Check jobs.csv for results.
+======================================================================
