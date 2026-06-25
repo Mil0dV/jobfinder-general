@@ -167,7 +167,7 @@ def _run_interactive():
     print("  paste job                    — paste a job description directly")
     print("  unset job                    — clear active job")
     print("  cl [#|url] [- extra]         — cover letter")
-    print("  resume [#|url] [- extra]     — tailored resume")
+    print("  resume/res [#|url] [- extra] — tailored resume")
     print("  apply [#|url] [- extra]      — cover letter + tailored resume")
     print("  salary [#|url]               — salary estimate")
     print("  answer [#]: <question>       — answer application question")
@@ -273,7 +273,7 @@ def _run_interactive():
                 r"^apply(?:\s+-\s+.+)?\s*$", user_input, _re.IGNORECASE
             )
             bare_resume = _re.match(
-                r"^(?:resume|tailor)(?:\s+-\s+.+)?\s*$", user_input, _re.IGNORECASE
+                r"^(?:resume|tailor|res)(?:\s+-\s+.+)?\s*$", user_input, _re.IGNORECASE
             )
             bare_cl = _re.match(
                 r"^(?:cl|cover\s*letter)(?:\s+-\s+.+)?\s*$", user_input, _re.IGNORECASE
@@ -286,7 +286,7 @@ def _run_interactive():
                 _handle_apply_command(apply_cmd)
                 continue
 
-            resume_cmd = _parse_action_command(user_input, ("resume", "tailor"))
+            resume_cmd = _parse_action_command(user_input, ("resume", "tailor", "res"))
             if resume_cmd:
                 _handle_resume_command(resume_cmd)
                 continue
@@ -377,9 +377,9 @@ def _run_interactive():
                     estimate_salary(job=job, url=url)
                 continue
 
-            # Otherwise pass to the OpenAI agent
-            response = root_agent.run(user_input)
-            print(f"\n🤖 Agent: {response}")
+            # Unrecognized input — show a hint rather than routing to the search agent.
+            print("   Unrecognized command. Try: cl / resume (res) / apply / salary /")
+            print("   answer / list jobs / set job <#|url> / paste job  (or 'exit' to quit).")
 
         except KeyboardInterrupt:
             print("\n\nGoodbye! Good luck with your climate tech job search! 🌍")

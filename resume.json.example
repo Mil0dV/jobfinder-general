@@ -1,0 +1,29 @@
+{
+  "name": "Your Name",
+  "contact": "City, Country | +00 000 000 0000 | you@example.com | LinkedIn: linkedin.com/in/yourhandle",
+  "professional_statement": "A 2-4 sentence summary of who you are, the impact you've had, and what drives you. Used as the anchor when tailoring your resume to a role.",
+  "core_competencies": "Skill One • Skill Two • Skill Three • Skill Four • Skill Five",
+  "technical_skills": "Tools & Tech One • Tools & Tech Two • Languages • Frameworks",
+  "experiences": [
+    {
+      "title": "Job Title — Company, Location (Start – End)",
+      "subtitle": "One-line description of the company.",
+      "scope": [
+        "What you owned and did.",
+        "Another responsibility."
+      ],
+      "achievements": [
+        "A quantified result you delivered.",
+        "Another measurable win."
+      ]
+    }
+  ],
+  "earlier_roles": [
+    "Earlier Title, Company (Year–Year)"
+  ],
+  "education": [
+    "Degree / Course, Institution (Year)"
+  ],
+  "languages": "Language (native) • Language (fluent)",
+  "interests": "Interest • Interest • Interest"
+}

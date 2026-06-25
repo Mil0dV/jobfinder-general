@@ -2,7 +2,7 @@
 
 Cover letters and application questions use Claude Sonnet 4.6 (Anthropic) with streaming.
 Salary estimates use Claude Haiku (Anthropic).
-Uses Milo's resume and style guide as context. Supports job selection from CSV,
+Uses the candidate's resume and style guide as context. Supports job selection from CSV,
 URL-based job descriptions, and interactive commands.
 """
 
@@ -17,6 +17,8 @@ import trafilatura
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv
+
+from resume_data import candidate_name, resume_as_text
 
 load_dotenv()
 
@@ -61,7 +63,12 @@ def _load_style_guide() -> str:
 
 
 def _load_resume() -> str:
-    return _load_text_file("resume.txt")
+    """Plain-text resume context, rendered from the structured resume (resume_data)."""
+    return resume_as_text()
+
+
+def _candidate_name() -> str:
+    return candidate_name()
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +137,7 @@ def fetch_job_description(url: str) -> str:
 def _cover_letter_system_prompt() -> str:
     style_guide = _load_style_guide()
     resume = _load_resume()
-    return f"""You are writing a cover letter as Milo de Vries. Write ONLY the cover letter text.
+    return f"""You are writing a cover letter as {_candidate_name()}. Write ONLY the cover letter text.
 No preamble, no commentary, no "Here is your cover letter" — just the letter itself.
 
 The example cover letters in the style guide are the authoritative voice to match.
@@ -162,7 +169,7 @@ RULES:
 def _question_system_prompt() -> str:
     style_guide = _load_style_guide()
     resume = _load_resume()
-    return f"""You are answering an application form question as Milo de Vries.
+    return f"""You are answering an application form question as {_candidate_name()}.
 Write ONLY the answer. No preamble, no commentary.
 
 The cover letter examples in the style guide define the voice — direct, casual-but-sharp, real.

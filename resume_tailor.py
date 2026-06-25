@@ -4,17 +4,19 @@ Uses Claude to suggest minimal, natural-sounding edits to the resume text,
 then rebuilds the docx with the original styling and converts to PDF.
 """
 
+import copy
 import json
 import os
 import re
 import subprocess
 import sys
+from io import BytesIO
 
 import anthropic
 import trafilatura
 from cover_letter import extract_job_meta, make_output_stem
+from resume_data import RESUME_DOCX_PATH, get_resume_data
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
@@ -43,90 +45,14 @@ def _get_client():
 
 
 # ---------------------------------------------------------------------------
-# Resume data structure
+# Resume data
 # ---------------------------------------------------------------------------
+#
+# Loading/derivation lives in resume_data: Resume_base.docx is the source of
+# truth, parsed into resume.json (regenerated when the docx changes).
+# get_base_resume() is kept as a thin alias for backwards compatibility.
 
-# The base resume text, parsed into editable sections.
-# Claude will return a modified version of this structure.
-
-BASE_RESUME = {
-    "name": "Milo de Vries",
-    "contact": "Wütoschingen, Germany | +31 6 3976 5259 | milo@xdh.nl | LinkedIn: linkedin.com/in/milod",
-    "professional_statement": (
-        "Over the last decade I've gone from founding and scaling a climate-tech startup to shaping "
-        "product strategy at South Pole, using code, data and design to turn ideas into tools with "
-        "measurable impact. Skilled at shaping SaaS and data-driven platforms, integrating AI/ML "
-        "where it makes sense and weaving security and identity into products used by enterprise "
-        "clients worldwide. Driven by pushing tech-for-good to its limits and telling the story."
-    ),
-    "core_competencies": (
-        "Product Strategy & Roadmapping \u2022 SaaS & B2B Platforms \u2022 ClimateTech Solutions "
-        "\u2022 AI/ML Integrations \u2022 Market Analysis \u2022 Stakeholder Management \u2022 "
-        "Fundraising & Investor Relations \u2022 Team Leadership & Mentorship \u2022 "
-        "Agile / Lean Product Development \u2022 User Research / UX Collaboration"
-    ),
-    "technical_skills": (
-        "Cloud & DevOps (AWS, GCP, Terraform) \u2022 SaaS Architecture & Integrations "
-        "(REST/GraphQL APIs) \u2022 Data & Analytics (SQL, BI tools) \u2022 Python \u2022 "
-        "JS/TS \u2022 Security & Identity Management (IAM) \u2022 ML / AI Integrations"
-    ),
-    "experiences": [
-        {
-            "title": "Product Lead \u2014 South Pole BV, Amsterdam (Apr 2022 \u2013 Present)",
-            "subtitle": "South Pole helps organisations realise deep decarbonisation pathways across industries.",
-            "scope": [
-                "Coordinated South Pole\u2019s Accelerator for six early-stage climate-tech applications, defining business cases, assessing PoCs and guiding roadmaps.",
-                "Directed product and technical strategy across multiple SaaS initiatives spun out of the Accelerator (Climate Risk Tool, CSRD Gap Tool), taking them from ideation through PoC, MVP and scale.",
-                "Led the technical side of the SME->Enterprise Climate Solution: drove architecture, UX design, and user testing. Contributing to market analysis, product strategy, design and evaluation of AI integrations.",
-                "Co-developed an AI-assisted PCF (product carbon footprinting) tool.",
-                "Conceived an offensive PR effort to restore South Pole\u2019s reputation in nature based offsetting. For this devised and scoped an open-source forest-impact calculator using satellite imagery and ML",
-            ],
-            "achievements": [
-                "Took multiple SaaS products from concept to launch, collectively serving 30+ enterprise clients and realising seven-figure revenue within 24 months.",
-                "Delivered the SME Climate Solution MVP in 6 months with full UX/user-testing cycles.",
-                "Built and launched a no-code double-materiality-assessment tool in 4 months, reducing manual work for consultants.",
-                "Led IAM/SSO integrations across two enterprise tools, including the first integration to go live under new security requirements.",
-                "Delivered a 10\u00d7 performance improvement on the Climate Risk tool.",
-                "Architected and realised the first AI-assisted PCF prototype.",
-            ],
-        },
-        {
-            "title": "Founder & CEO \u2014 CO\u2082ok, Utrecht (Apr 2017 \u2013 Mar 2022)",
-            "subtitle": "CO\u2082ok enables consumers to make their shopping climate neutral",
-            "scope": [
-                "Founded and grew CO\u2082ok from concept to acquisition; led strategy, product, development, fundraising and team building.",
-                "Designed and launched a seamless, often tailored, integration product for online retailers across multiple e-commerce platforms.",
-                "Developed sales and marketing strategies and oversaw onboarding and support.",
-                "Brought a second product from concept to market and made a data-driven decision to sunset it and focus on the core product.",
-                "Negotiated an acquihire by South Pole.",
-            ],
-            "achievements": [
-                "Onboarded 50+ merchants and enabled tens of thousands of compensated transactions, making climate-neutral shopping easy for consumers.",
-                "Built and led a multidisciplinary team of 10+, secured seed funding and partnerships.",
-                "Personally landed first major client through a tailored evidence-based pitch.",
-                "Created and launched a second product, grew it to 100+ users.",
-                "Delivered a successful founder exit while ensuring continued growth of the product and team.",
-            ],
-        },
-    ],
-    "earlier_roles": [
-        "Senior Systems Engineer, e-Village (2015\u20132016)",
-        "Senior DevOps Engineer, Unitt (2014\u20132015)",
-        "DevOps Developer, Springest (2014)",
-        "System Engineer / Security Lieutenant, Info.nl (2007\u20132013)",
-    ],
-    "education": [
-        "MITx \u2013 Introduction to CS & Data Science (2016)",
-        "Stanford \u2013 Startup Engineering (2013)",
-        "Architecting on AWS (2014)",
-        "Technical University Eindhoven \u2013 Computer Science / Electrical Engineering (partly completed)",
-    ],
-    "languages": "Dutch (native) \u2022 English (fluent) \u2022 German (fluent)",
-    "interests": (
-        "Designing (climate-tech) startups \u2022 Adventures with my daughter Nova "
-        "Skiing/snowboarding \u2022 Technology \u2022 IT security/digital privacy"
-    ),
-}
+get_base_resume = get_resume_data
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +178,59 @@ def _ensure_bullet_numbering(doc):
     numbering.append(num)
 
 
-def build_resume_docx(data: dict, output_path: str):
-    """Build a styled resume docx from structured data."""
+def _copy_floating_images(src_path: str, dst_doc):
+    """Copy floating (anchored) images — e.g. a photo — from src docx into dst_doc.
+
+    The rebuilt resume is generated from text only, so any image in the source docx
+    would otherwise be lost. We deep-copy each anchored drawing, re-register its image
+    blob in the new package (fixing the relationship id), and align it flush to the
+    right margin with text wrapping on the left for a clean single-column layout.
+    """
+    try:
+        src = Document(src_path)
+    except Exception:
+        return 0
+    if not dst_doc.paragraphs:
+        return 0
+
+    copied = 0
+    for drawing in src.element.body.findall(".//" + qn("w:drawing")):
+        if drawing.find(".//" + qn("wp:anchor")) is None:
+            continue  # inline images have no place in the regenerated layout
+        blip = drawing.find(".//" + qn("a:blip"))
+        if blip is None:
+            continue
+        embed = blip.get(qn("r:embed"))
+        if embed not in src.part.related_parts:
+            continue
+        rId, _ = dst_doc.part.get_or_add_image(BytesIO(src.part.related_parts[embed].blob))
+
+        new_drawing = copy.deepcopy(drawing)
+        new_drawing.find(".//" + qn("a:blip")).set(qn("r:embed"), rId)
+
+        pos_h = new_drawing.find(".//" + qn("wp:positionH"))
+        if pos_h is not None:
+            pos_h.set("relativeFrom", "margin")
+            for child in list(pos_h):
+                pos_h.remove(child)
+            align = OxmlElement("wp:align")
+            align.text = "right"
+            pos_h.append(align)
+        wrap = new_drawing.find(".//" + qn("wp:wrapSquare"))
+        if wrap is not None:
+            wrap.set("wrapText", "left")
+
+        dst_doc.paragraphs[0].add_run()._r.append(new_drawing)
+        copied += 1
+    return copied
+
+
+def build_resume_docx(data: dict, output_path: str, photo_src: str | None = None):
+    """Build a styled resume docx from structured data.
+
+    If photo_src points to a docx containing floating image(s) (e.g. a photo), they
+    are carried over into the generated resume.
+    """
     doc = Document()
 
     # Page margins
@@ -333,6 +310,9 @@ def build_resume_docx(data: dict, output_path: str):
     _add_heading(doc, "Interests")
     _add_body(doc, data["interests"])
 
+    if photo_src and os.path.exists(photo_src):
+        _copy_floating_images(photo_src, doc)
+
     doc.save(output_path)
     return output_path
 
@@ -352,19 +332,22 @@ def _load_style_guide() -> str:
 
 
 TAILOR_SYSTEM_PROMPT = """\
-You are a resume editor for Milo de Vries. Your job is to make MINIMAL, targeted edits \
-to his resume so it better matches a specific role description.
+You are a resume editor for {name}. Your job is to make MINIMAL, targeted edits \
+to their resume so it better matches a specific role description.
 
 RULES — follow these strictly:
 1. Make as few changes as possible. Most sections should stay IDENTICAL.
 2. NEVER fabricate experience, skills, or achievements. Only use what's already there.
-3. NEVER add buzzwords, corporate-speak, or generic filler. Keep Milo's direct, plain voice.
+3. NEVER add buzzwords, corporate-speak, or generic filler. Keep the candidate's direct, plain voice.
 4. Allowed edits:
    - Reword the Professional Statement to emphasize relevant experience (keep same length)
    - Reorder bullet points to put the most relevant ones first
    - Slightly rephrase a bullet to highlight a relevant aspect (keep factual)
-   - Reorder items in Core Competencies or Technical Skills to lead with the most relevant
-   - Add a skill to Technical Skills ONLY if it's clearly implied by his experience
+   - Core Competencies: select ONLY the 6-8 most relevant items for this role and drop
+     the rest, most-relevant first. Keep the same "•"-separated single-string format.
+     Do not invent new competencies — only choose from those already listed.
+   - Reorder items in Technical Skills to lead with the most relevant
+   - Add a skill to Technical Skills ONLY if it's clearly implied by their experience
 5. Do NOT touch: name, contact, dates, job titles, company names, education, languages, interests.
 6. Do NOT lengthen the resume. If you add a word somewhere, remove one elsewhere.
 7. The result should read naturally — a human reviewer should not detect AI involvement.
@@ -380,14 +363,17 @@ Return the complete structure — unchanged sections included verbatim."""
 
 def get_tailored_resume(role_description: str) -> dict:
     """Send resume + role description to Claude, get back tailored resume data."""
+    base = get_base_resume()
     client = _get_client()
     style_guide = _load_style_guide()
 
-    system = TAILOR_SYSTEM_PROMPT.format(style_guide=style_guide)
+    system = TAILOR_SYSTEM_PROMPT.format(
+        name=base.get("name") or "the candidate", style_guide=style_guide
+    )
 
     user_msg = f"""Here is the current resume data (JSON):
 
-{json.dumps(BASE_RESUME, indent=2, ensure_ascii=False)}
+{json.dumps(base, indent=2, ensure_ascii=False)}
 
 Here is the role description to tailor for:
 
@@ -561,7 +547,7 @@ def generate_base_resume(role_description: str = "", output_name: str | None = N
         company, role = extract_job_meta(role_description)
         output_name = make_output_stem("Resume", company, role)
     docx_path = os.path.join(output_dir, f"{output_name}.docx")
-    build_resume_docx(BASE_RESUME, docx_path)
+    build_resume_docx(get_base_resume(), docx_path, photo_src=RESUME_DOCX_PATH)
     pdf_path = docx_to_pdf(docx_path, output_dir)
     print(f"   Saved resume: {pdf_path or docx_path}")
     return pdf_path or docx_path
@@ -596,16 +582,17 @@ def tailor_resume(
         full_description += f"\n\nExtra context: {extra_context}"
 
     # Get tailored resume from Claude
+    base = get_base_resume()
     tailored = get_tailored_resume(full_description)
 
     # Show diff (informational only — no confirmation)
-    has_changes = show_edits(BASE_RESUME, tailored)
+    has_changes = show_edits(base, tailored)
     if not has_changes:
-        tailored = BASE_RESUME
+        tailored = base
 
     # Build docx
     docx_path = os.path.join(output_dir, f"{output_name}.docx")
-    build_resume_docx(tailored, docx_path)
+    build_resume_docx(tailored, docx_path, photo_src=RESUME_DOCX_PATH)
     print(f"   Saved docx: {docx_path}")
 
     # Convert to PDF

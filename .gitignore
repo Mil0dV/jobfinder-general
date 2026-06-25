@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# uv
+uv.lock
+.python-version
+
+# Environment variables
+.env
+.env.test
+
+# Personal data — resumes, generated applications, job results (keep local, never publish)
+applications/
+resume.txt
+resume.json
+Cover-letter styleguide.md
+Resume.pdf
+Resume_*.pdf
+Resume_*.docx
+Resume_base.docx
+*_jobs.csv
+jobs.csv
+jobs_last.csv
+jobs_old.csv
+
+# Caches & logs
+company_cache.json
+job_cache.json
+*.log
+
+# Backups & editor lock files
+*.bak
+*.bak_*
+.~lock.*#
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ADK specific
+.adk/

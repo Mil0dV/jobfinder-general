@@ -1,0 +1,68 @@
+# Cover Letter Style Guide
+
+This file is the authoritative voice reference fed to Claude when generating cover
+letters and application answers. Copy it to `Cover-letter styleguide.md` and adapt it
+to *your* voice — the tone notes below are a sensible default, and the examples section
+is where you paste a few of your own real cover letters so the model can match you.
+
+---
+
+## 🎯 Overall Tone & Intent
+
+* **Direct, personal, informal-but-sharp.**
+* Avoid generic polish or corporate-speak — write like someone who knows what they're doing and says it plainly.
+* Sound like a real person motivated by purpose and the work itself, not status or platitudes.
+* Let authentic curiosity, alignment, and track record speak louder than ego.
+
+---
+
+## ✍️ Structure & Flow
+
+* **Opening:** A specific hook — how/where the job came to attention, or something about the company/product that resonates.
+* **Middle:** Connect real experience to what the role needs — pragmatically, with just enough detail to be credible.
+* **Close:** Clean and confident, e.g. *"I look forward to expanding on this in an interview."* Avoid gushing sign-offs.
+* **Total length:** ~150–220 words. Digestible, no fluff. Ideally fits on one screen.
+
+---
+
+## 🧠 Content Priorities
+
+* Lead with **relevance** — map what you've done to what they need.
+* Use real, tangible examples: projects shipped, tools used, problems solved.
+* Show **cultural fit** — that you get how they work and why.
+* Inject **authentic motivation** — a line or two on why this work/company matters to you, not fake passion.
+
+---
+
+## 🧾 Grammar, Style, and Quirks
+
+* **Use sentence fragments intentionally, but sparingly** — good for rhythm; don't stack them.
+* **Avoid em-dashes (—).** Prefer commas, colons, semicolons, or a plain hyphen (`-`).
+* **Favor short, readable paragraphs.** Break at natural pivots.
+* **Minimalist punctuation.** Don't overuse ellipses or parentheses.
+* **Use contractions sparingly.** Mixing formal ("I have") and casual ("I'd") adds texture.
+* **Use precise verbs.** No "leveraging synergies" or "driving impact." Build, debug, migrate, improve, fix.
+* **Avoid résumé-isms** like "fast-paced environment," "team player," or "stakeholder alignment."
+* **Avoid the dramatic backwards setup** — describing something then pivoting with "— that's exactly the kind of X I want to be building." It reads as performed enthusiasm. Just say it plainly.
+
+---
+
+## ✅ Style Examples
+
+> Paste a handful of short lines here that capture your voice at its best.
+
+---
+
+## Cover letter examples
+
+Paste 2–4 of your own real cover letters below. These are the most important part of the
+guide — Claude matches their register, rhythm, and phrasing more than any rule above.
+
+```
+LS,
+
+[Your cover letter here.]
+
+Regards,
+[Your name]
+```

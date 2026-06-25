@@ -115,7 +115,7 @@ I came across the Software Engineer role at Climeworks and...
 ============================================================
 
    thinking...
-I founded CO₂ok to make climate-neutral shopping easy for...
+I've spent the last few years building tools that cut carbon at scale...
 
 ============================================================
    (94 words)
@@ -130,12 +130,26 @@ I founded CO₂ok to make climate-neutral shopping easy for...
 ├── cli.py              # Entry point: argparse CLI + interactive loop
 ├── agent.py            # OpenAI agent loop + all job search tools
 ├── cover_letter.py     # Cover letter & question generation (Anthropic/Claude)
-├── jobs.csv            # Output: accumulated job results
-├── resume.txt          # Milo's resume (context for cover letters)
-├── Cover-letter styleguide.md  # Writing style guide (context for Claude)
+├── resume_tailor.py    # Resume tailoring (Anthropic/Claude) → styled docx/PDF
+├── resume_data.py      # Loads Resume_base.docx → structured resume.json (cached)
+├── jobs.csv            # Output: accumulated job results (gitignored)
+├── Resume_base.docx    # Your resume — the single source of truth (gitignored)
+├── resume.json         # Structured resume, derived from the docx (gitignored)
+├── Cover-letter styleguide.md  # Your writing style guide (context for Claude; gitignored)
 ├── pyproject.toml      # Dependencies
 └── .env.example        # Environment variable template
 ```
+
+> **Note:** `Resume_base.docx`, `resume.json`, `Cover-letter styleguide.md`, generated
+> documents in `applications/`, and `jobs.csv` are gitignored so your personal data stays
+> local. To get started:
+>
+> - Drop your resume in as **`Resume_base.docx`** — this is the single source of truth.
+>   On first use it's parsed (by Claude) into `resume.json`, the structured form used for
+>   tailoring and cover-letter context. Edit the docx and it's re-parsed automatically.
+>   (No docx? Copy `resume.json.example` → `resume.json` and edit it directly instead.)
+> - `Cover-letter styleguide.md.example` → `Cover-letter styleguide.md` (paste a few of
+>   your own cover letters so Claude matches your voice)
 
 ## CLI Reference
 
