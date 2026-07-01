@@ -66,18 +66,29 @@ uv run python cli.py --interactive
 
 ### Interactive mode commands
 
-Start with `--interactive` (with or without a search), then use these commands:
+Start with `--interactive` (with or without a search). It's a slash-command shell —
+**a leading `/` is optional**, so `cl 5` and `/cl 5` are identical. Press **Tab** to
+complete commands and job numbers, **↑ / Ctrl+R** to recall history (persisted across
+sessions in `.jobfinder_history`), and type `/help` for the full list. A typo gets a
+"did you mean…?" hint.
 
 | Command | What it does |
 |---------|--------------|
-| `list jobs` | Show numbered list of jobs in jobs.csv |
-| `cl 5` | Cover letter for job #5 |
-| `cl 5 - mention my terraform work` | Cover letter with extra context |
-| `cl https://boards.greenhouse.io/...` | Cover letter from a URL |
-| `cl 5 https://example.com/job` | Job #5 augmented with full description from URL |
-| `answer 5: Why do you want to work here?` | Answer application question for job #5 |
-| `aq: Tell us about a time you led a team` | Answer question without specific job context |
-| `answer https://example.com/job: Why this role?` | Answer question with URL context |
+| `/jobs` | Show numbered list of jobs in jobs.csv (also `list jobs`) |
+| `/cl 5` | Cover letter for job #5 |
+| `/cl 5 - mention my terraform work` | Cover letter with extra context |
+| `/cl @climeworks` | Fuzzy-pick a saved job by title/company |
+| `/cl https://boards.greenhouse.io/...` | Cover letter from a URL |
+| `/resume 5` · `/apply 5` · `/salary 5` | Tailor resume · cover letter + resume · salary estimate |
+| `/answer 5: Why do you want to work here?` | Answer application question for job #5 |
+| `/aq: Tell us about a time you led a team` | Answer question without specific job context |
+| `/set 5` · `/paste` | Set an active job (then omit the #) · or paste a description |
+| `/retry` · `/redo make it shorter` | Re-run the last generation (`/redo` adds guidance) |
+| `/open [docx\|pdf\|dir]` · `/status` | Open the latest generated file · show the active session |
+| `!ls -t applications` | Run a shell command |
+
+Ctrl+C cancels a running generation and returns you to the prompt; Ctrl+C at an empty
+prompt (or `/exit`) quits.
 
 ### Example session
 

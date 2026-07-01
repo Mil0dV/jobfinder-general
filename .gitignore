@@ -36,6 +36,9 @@ company_cache.json
 job_cache.json
 *.log
 
+# Interactive shell history (may contain pasted job text / URLs)
+.jobfinder_history
+
 # Backups & editor lock files
 *.bak
 *.bak_*

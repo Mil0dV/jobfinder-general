@@ -25,17 +25,20 @@ uv run python cli.py -a 1                                         # Both CL + re
 uv run python cli.py -a https://example.com/job                   # Both from URL
 # Long forms: --cl/--cover-letter, --tailor/--resume, --apply
 
-# Interactive mode commands
-# cl 5                        — cover letter for job #5 from CSV
-# cl 5 - mention terraform    — with extra context
-# cl https://example.com/job  — from a URL
-# resume 5                    — tailor resume for job #5
-# resume https://example.com  — tailor resume from URL
-# apply 5                     — both cover letter + tailored resume
-# apply https://example.com   — both from URL
-# answer 5: Why this company? — answer application question for job #5
-# aq: Tell me about yourself  — answer question without job context
-# list jobs                   — show numbered job list
+# Interactive mode — a slash-command shell (see "Interactive Shell" below).
+# A leading '/' is optional, so every command below also works without it.
+# Tab completes commands & job numbers; Up/Ctrl+R recall history (persisted to
+# .jobfinder_history); /help lists everything; type /exit (or Ctrl+C twice) to quit.
+# /cl 5                       — cover letter for job #5 from CSV
+# /cl 5 - mention terraform   — with extra context
+# /cl @overstory              — fuzzy-pick a saved job by title/company
+# /cl https://example.com/job — from a URL
+# /resume 5  ·  /apply 5  ·  /salary 5   — tailor resume / CL+resume / salary estimate
+# /answer 5: Why this company? — answer application question for job #5
+# /aq: Tell me about yourself — answer question without job context
+# /set 5  ·  /paste           — set an active job (then omit the #); or paste a description
+# /retry  ·  /redo make it shorter — re-run the last generation (redo adds guidance)
+# /open [docx|pdf|dir]  ·  /status  ·  /jobs  ·  !ls applications  — utilities
 
 # Lint & Format
 black .                    # Format code
@@ -54,6 +57,23 @@ The codebase is a single-module Python application with two entry points:
 - **`agent.py`** — Contains everything else: the custom agentic loop, all tool functions, and agent initialization.
 - **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Streams output with thinking indicator. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
 - **`resume_tailor.py`** — Resume tailoring using Claude. Makes minimal, natural edits to match a role description. Builds a styled docx matching the original Resume.pdf layout, converts to PDF via LibreOffice. Interactive command: `resume <job#>` or `resume <url>`.
+
+### Interactive Shell (`cli.py`)
+
+`_run_interactive()` is a stdlib-`readline` REPL. A module-level `COMMANDS`
+registry (built by `_build_registry()`) is the single source of truth that
+drives `_dispatch()`, Tab completion (`_completer`), `/help` (`_print_help_table`),
+and difflib did-you-mean (`_suggest`) — so the command list never drifts out of
+sync. Each `Command` maps a verb to a thin handler `(args, ctx)` over the existing
+`generate_cover_letter` / `tailor_resume` / `estimate_salary` /
+`answer_application_question` functions; `_Ctx` holds the active session job and
+the last generation (for `/retry` and `/redo`). A leading `/` is stripped before
+lookup, so legacy bare commands (`cl 5`, `set job 2`, `list jobs`, `aq:`) keep
+working unchanged. `_resolve_target()` resolves a `#`, `@name` fuzzy match, URL,
+or the session job into a job context. Persistent history lives in
+`.jobfinder_history` (gitignored); `select()`-based paste detection (`_absorb_paste`)
+captures a pasted multi-line job description as the active job. Ctrl+C cancels a
+running generation back to the prompt; Ctrl+C at an empty prompt exits.
 
 ### Agent Loop (`OpenAIAgent` class)
 
