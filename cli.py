@@ -11,7 +11,7 @@ import select
 import subprocess
 import sys
 from dataclasses import dataclass
-from agent import root_agent
+from agent import root_agent, run_profile_search
 from cover_letter import (
     parse_command,
     list_jobs_brief,
@@ -751,6 +751,8 @@ Usage:
 
 Search:
   job_titles                    comma-separated titles, e.g. "PM,Engineer"
+  --profile                     search all target roles from candidate_profile.py
+                                (Head of Product, CTO, founding engineer, EiR, ...)
   -l / --location  LOCATION     filter by location
   -t / --job-type  TYPE         full-time | part-time | contract | remote
   -e / --experience LEVEL       entry | mid | senior
@@ -785,6 +787,7 @@ Notes:
       jobfinder -a 'https://example.com/job' -x 'I found this via HN'
 
 Examples:
+  jobfinder --profile -l Switzerland    # search all your target roles
   jobfinder "Software Engineer"
   jobfinder "Data Scientist" -l Switzerland
   jobfinder "PM,Engineer" -l Germany -i
@@ -808,6 +811,7 @@ def main():
     )
     parser.add_argument("-e", "--experience", default="", choices=["", "entry", "mid", "senior"])
     parser.add_argument("-i", "--interactive", action="store_true")
+    parser.add_argument("--profile", action="store_true")
     parser.add_argument(
         "-c", "--cover-letter", "--cl", metavar="JOB|URL", default=None, dest="cover_letter"
     )
@@ -907,6 +911,17 @@ def main():
                     print(list_jobs_brief())
                     return
             generate_cover_letter(job, extra_context=args.extra, url=cmd.get("url") or "")
+        return
+
+    # --- Profile search: deterministic pipeline over all target roles ---
+    if args.profile or args.job_titles.strip().lower() == "profile":
+        print("=" * 70)
+        print("🌱 Climate & Green Tech Job Finder — target-role profile search")
+        print("=" * 70)
+        query = "" if args.job_titles.strip().lower() in ("", "profile") else args.job_titles
+        run_profile_search(location=args.location, query=query)
+        if args.interactive:
+            _run_interactive()
         return
 
     if not args.job_titles and not args.interactive:

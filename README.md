@@ -14,8 +14,7 @@ cp .env.example .env
 
 **.env keys:**
 ```
-OPENAI_API_KEY=...          # Required — job search & validation
-ANTHROPIC_API_KEY=...       # Required — cover letter generation
+ANTHROPIC_API_KEY=...       # Required — agent, job validation, cover letters, resumes
 ADZUNA_APP_ID=...           # Optional — adds more job results
 ADZUNA_API_KEY=...
 ```
@@ -25,6 +24,9 @@ ADZUNA_API_KEY=...
 ## Job Search
 
 ```bash
+# Search all target roles from candidate_profile.py (recommended)
+uv run python cli.py --profile -l "Switzerland"
+
 # Search by role
 uv run python cli.py "Software Engineer"
 
@@ -40,13 +42,24 @@ uv run python cli.py "Software Engineer" -l "Switzerland" --interactive
 
 Results are saved to `jobs.csv`. Each run appends new jobs (deduped by URL).
 
-**Data sources searched in parallel:**
-- **Arbeitnow** — EU/DACH jobs, no key needed
-- **RemoteOK** — global remote jobs, no key needed
-- **ClimateTechList** — ~11k jobs from ~580 climate companies, no key needed
-- **Adzuna** — broad coverage across 16+ countries (optional, needs key)
+**Data sources searched in parallel (no key needed unless noted):**
+- **Climatebase** — ~14k climate jobs, queried via its public Algolia search index
+- **ClimateTechList** — ~10k jobs from ~580 climate companies, via its Airtable shared view
+- **Greenhouse / Lever** — ATS boards of curated climate companies (Watershed, Overstory, Patch, Pachama, Voltus, ...)
+- **Jobs in Carbon** — carbon-markets niceboard, via its sitemap
+- **Remote Impact** — remote climate & environment jobs
+- **Arbeitnow** — EU/DACH jobs
+- **RemoteOK** — global remote jobs
+- **Adzuna** — broad coverage across 16+ countries (optional, needs free API key)
 
-Each job is validated by GPT-4o-mini for title relevance and climate score (0–5).
+**Sources not (yet) integrated, and why:**
+- **remoteclimatejobs.co** — a beehiiv newsletter, not a structured job board; listings only exist inside prose posts
+- **inclimate.com** — ships an empty JS shell (~3 KB HTML); jobs render client-side with no discoverable data API
+- **cdrjobs.earth** — Webflow site whose job board loads client-side; no job data in the served HTML
+- **welcometothejungle, idealist.org** — generalist boards behind their own search APIs; Adzuna + Climatebase already cover most of their climate listings
+- **climatehack.global, startup.ch, joinup.ch** — community/newsletter sites without machine-readable job feeds
+
+Each job is scored by Claude (Haiku 4.5) for role fit (0–5, against `candidate_profile.py`) and company climate relevance (0–5); only good matches are kept.
 
 ---
 
@@ -139,7 +152,7 @@ I've spent the last few years building tools that cut carbon at scale...
 
 ```
 ├── cli.py              # Entry point: argparse CLI + interactive loop
-├── agent.py            # OpenAI agent loop + all job search tools
+├── agent.py            # Claude agent loop + all job search tools
 ├── cover_letter.py     # Cover letter & question generation (Anthropic/Claude)
 ├── resume_tailor.py    # Resume tailoring (Anthropic/Claude) → styled docx/PDF
 ├── resume_data.py      # Loads Resume_base.docx → structured resume.json (cached)

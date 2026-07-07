@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Climate & Green Tech Job Finder — an AI-powered agent that searches multiple free job APIs (Arbeitnow, RemoteOK, Greenhouse, Adzuna, ClimateTechList) for climate/green-tech positions, validates relevance with GPT, and outputs results to CSV.
+Climate & Green Tech Job Finder — an AI-powered agent that searches nine free job sources (Arbeitnow, RemoteOK, Adzuna, Greenhouse, Lever, ClimateTechList, Climatebase, Jobs in Carbon, Remote Impact) for climate/green-tech positions matching the candidate's target-role profile, validates role fit + climate relevance with Claude, and outputs ranked results to CSV. All LLM calls go through the Anthropic API (no OpenAI dependency).
 
 ## Commands
 
@@ -14,6 +14,7 @@ uv sync                    # Install dependencies
 uv sync --extra dev        # Install with dev tools (pytest, black, ruff)
 
 # Run
+uv run python cli.py --profile -l "Switzerland"                   # Search all target roles (recommended)
 uv run python cli.py "Software Engineer"                          # Basic search
 uv run python cli.py "Data Scientist" --location "Switzerland"    # With location
 uv run python cli.py "Engineer,PM" -l "Germany" --interactive     # Multi-role, interactive
@@ -53,8 +54,9 @@ Style: 100-char line length, Python 3.10+ target (configured in pyproject.toml f
 
 The codebase is a single-module Python application with two entry points:
 
-- **`cli.py`** — argparse CLI that parses job titles (comma-separated), location, job-type, experience level, `--interactive` flag, and `--cover-letter`/`--cl` flag. Invokes the agent from `agent.py` and cover letter commands from `cover_letter.py`.
-- **`agent.py`** — Contains everything else: the custom agentic loop, all tool functions, and agent initialization.
+- **`cli.py`** — argparse CLI that parses job titles (comma-separated), location, job-type, experience level, `--profile`, `--interactive`, and `--cover-letter`/`--cl` flags. `--profile` runs `run_profile_search()` (deterministic, no agent loop); free-text titles go through the agent from `agent.py`. Cover letter commands come from `cover_letter.py`.
+- **`agent.py`** — Contains everything else: the custom agentic loop, all source scrapers, LLM validation, and agent initialization.
+- **`candidate_profile.py`** — The candidate's target-role profile: `TARGET_ROLES` (human-readable, fed to LLM validation), `ROLE_PATTERNS` (regex families for local title filtering), `EXCLUDE_PATTERNS` (interns, volunteers, recruiting spam), and `PROFILE_QUERY_SEEDS` (short queries for sources with server-side search). Edit this file to change what a "fit" job is.
 - **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Streams output with thinking indicator. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
 - **`resume_tailor.py`** — Resume tailoring using Claude. Makes minimal, natural edits to match a role description. Builds a styled docx matching the original Resume.pdf layout, converts to PDF via LibreOffice. Interactive command: `resume <job#>` or `resume <url>`.
 
@@ -75,29 +77,39 @@ or the session job into a job context. Persistent history lives in
 captures a pasted multi-line job description as the active job. Ctrl+C cancels a
 running generation back to the prompt; Ctrl+C at an empty prompt exits.
 
-### Agent Loop (`OpenAIAgent` class)
+### Agent Loop (`ClaudeAgent` class)
 
-Custom agentic loop using OpenAI function calling. Runs up to 10 iterations of tool calls against `gpt-4o-2024-08-06`. The agent is initialized with three tools: `search_jobs`, `get_company_info`, `save_csv`.
+Manual tool-use loop against the Anthropic Messages API (`claude-opus-4-8`, adaptive thinking). Runs up to 10 iterations: builds tool `input_schema`s from function signatures via `inspect`, executes every `tool_use` block in the response, and returns all `tool_result` blocks in a single user message (errors go back with `is_error: true`). The agent is initialized with three tools: `search_jobs`, `get_company_info`, `save_csv`.
 
 ### Tool Functions in `agent.py`
 
-- **`search_jobs()`** — Unified entry point. Queries all five APIs in parallel, deduplicates by URL, then batch-validates with LLM. Returns up to 50 jobs.
-- **`search_arbeitnow()`** — EU/DACH-focused, free API, includes EN↔DE fuzzy title matching.
+- **`search_jobs(query, location, ...)`** — Unified entry point. Empty query or `"profile"` searches the full target-role profile. Queries all nine sources in parallel, filters titles via `_title_matches()` (profile regexes or free-text query), dedupes by URL and (company, title), drops jobs older than `max_age_days` (default 90), batch-validates with LLM, keeps jobs with `fit_score >= 3` and `climate_score >= 2`, sorted by fit → climate → recency.
+- **`search_arbeitnow()`** — EU/DACH-focused, free API.
 - **`search_remoteok()`** — Remote-only jobs from RemoteOK JSON feed.
-- **`search_greenhouse()`** — Scrapes Greenhouse boards of curated climate companies (Climeworks, Watershed, Pachama, etc.) with 10 concurrent workers.
-- **`search_adzuna()`** — Multi-country API; requires `ADZUNA_APP_ID` and `ADZUNA_API_KEY` env vars.
-- **`search_climatetechlist()`** — Scrapes ClimateTechList's Airtable shared view (~10,600 jobs from ~580 climate companies). No API key needed.
-- **`validate_jobs_batch()`** — Sends jobs in batches of 15 to `gpt-4o-mini` for relevance scoring and climate score (0–5).
+- **`search_adzuna()`** — Multi-country API; requires `ADZUNA_APP_ID` and `ADZUNA_API_KEY` env vars. In profile mode fans out over `PROFILE_QUERY_SEEDS`.
+- **`search_greenhouse()` / `search_lever()`** — Curated climate companies' ATS boards (slugs verified 2026-07; dead slugs skip silently — refresh the lists occasionally).
+- **`search_climatetechlist()`** — Scrapes ClimateTechList's Airtable shared view (~10k jobs from ~580 climate companies). No API key needed.
+- **`search_climatebase()`** — Climatebase.org (~14k climate jobs) via its public search-only Algolia index (credentials extracted from their frontend; if they rotate, re-extract from the `_app-*.js` bundle). Fans out over `PROFILE_QUERY_SEEDS`, filters by country facet + Remote.
+- **`search_jobsincarbon()`** — Jobs in Carbon niceboard via its sitemap; fetches matching job pages for real titles.
+- **`search_remoteimpact()`** — Remote Impact's climate & environment category (HTML parsing).
+- **`validate_jobs_batch()`** — Sends jobs in batches of 15 (6 parallel workers) to `claude-haiku-4-5` with a JSON-schema-constrained response (`output_config.format`), falling back to source-based priors if the API is unavailable (climate-only boards get climate=4). Scores `fit` (0–5 vs. candidate profile) and `climate` (0–5 company mission) with a one-line `reason`.
 - **`get_company_info()`** — DuckDuckGo search for company sustainability info; cached in `company_cache.json`.
-- **`save_csv()`** — Appends to `jobs.csv`, deduplicates by normalized URL, handles dynamic columns.
+- **`save_jobs()` / `save_csv()`** — Appends to `jobs.csv`, deduplicates by normalized URL, handles dynamic columns. CSV columns include `fit_score`, `climate_score`, `reason`.
 
 ### Data Flow
 
-CLI args → `OpenAIAgent.run()` → agent calls `search_jobs` (parallel API queries → dedup → LLM validation) → optionally `get_company_info` → `save_csv` → `jobs.csv`
+`--profile`: CLI → `run_profile_search()` → `search_jobs` (parallel sources → title filter → dedup → LLM validation → threshold + rank) → `save_jobs` → `jobs.csv` (deterministic, no agent loop).
+
+Free-text search: CLI args → `ClaudeAgent.run()` → agent calls `search_jobs` → optionally `get_company_info` → `save_csv` → `jobs.csv`.
+
+## Job Sources
+
+Integrated (all free): Climatebase (public Algolia index — app `8PSNFFQTXQ`, index `Job_production`; if it stops working, re-extract credentials from their `_app-*.js` bundle), ClimateTechList (Airtable shared view), Greenhouse + Lever ATS boards (curated slugs, verified 2026-07), Jobs in Carbon (niceboard sitemap), Remote Impact (HTML), Arbeitnow, RemoteOK, Adzuna (needs API key).
+
+Probed but not integrable (checked 2026-07): **remoteclimatejobs.co** is a beehiiv newsletter (jobs only in prose posts); **inclimate.com** serves an empty JS shell with no data API; **cdrjobs.earth** is a Webflow site with client-side-only job data; **welcometothejungle** and **idealist.org** are generalist boards largely covered by Adzuna/Climatebase; **climatehack.global / startup.ch / joinup.ch** have no machine-readable job feeds. Re-probe before assuming this is still true.
 
 ## Environment Variables
 
 Defined in `.env` (see `.env.example`):
-- `OPENAI_API_KEY` (required)
+- `ANTHROPIC_API_KEY` (required — agent loop `claude-opus-4-8`, validation `claude-haiku-4-5`, cover letters, resume tailoring)
 - `ADZUNA_APP_ID` / `ADZUNA_API_KEY` (optional, for Adzuna source)
-- `ANTHROPIC_API_KEY` (required for cover letter generation)

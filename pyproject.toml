@@ -1,11 +1,10 @@
 [project]
 name = "climate-job-finder"
 version = "0.2.0"
-description = "A climate and green tech job finder agent using OpenAI"
+description = "A climate and green tech job finder agent using the Anthropic API"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "openai>=1.0.0",
     "ddgs>=6.0.0",
     "python-dotenv>=1.0.0",
     "trafilatura>=1.6.0",
