@@ -601,7 +601,9 @@ def generate_cover_letter(
     header = f"Cover Letter: {title} @ {company}"
     system_prompt = _cover_letter_system_prompt()
     if drunk:
-        header += "   🦪 pearl · drunk draft"
+        from candidate_profile import is_pearl
+
+        header += "   🦪 pearl · drunk draft" if job and is_pearl(job) else "   🍸 drunk draft"
         system_prompt += _DRUNK_ADDENDUM
     text = _stream_response(system_prompt, user_prompt, header, revise=not drunk)
 

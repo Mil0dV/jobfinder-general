@@ -10,6 +10,7 @@ import readline  # arrow keys, history, Tab completion, Ctrl+R in input()
 import select
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from agent import root_agent, run_profile_search
 from cover_letter import (
@@ -220,6 +221,34 @@ def _register_url_job(url: str, role_desc: str):
         pass
 
 
+def _register_pasted_job(role_desc: str, company: str, title: str) -> dict | None:
+    """Save a pasted (URL-less) job description as a jobs.csv row (source "pasted").
+
+    Returns the job dict to use as the session job, or None when the meta
+    extraction couldn't identify the posting. save_jobs dedupes by
+    company + title, so re-pasting the same job is harmless.
+    """
+    if company == "Unknown" or title == "Role":
+        return None
+    try:
+        from datetime import date
+
+        from agent import save_jobs
+
+        job = {
+            "title": title,
+            "company": company,
+            "url": "",
+            "posted_date": date.today().isoformat(),
+            "source": "pasted",
+            "_desc": role_desc,
+        }
+        save_jobs([job])  # dedupes, writes jobs.csv, pushes to the sync DB
+        return job
+    except Exception:
+        return None
+
+
 def _resolve_target_core(target: str) -> tuple[dict | None, str, str] | None:
     """Resolve a single token (#|@name|url) to (job, url, role_desc), or None."""
     target = target.strip()
@@ -283,12 +312,13 @@ def _gen(ctx, kind, job, url, role_desc, extra="", question=None):
     """Run a generation and remember it for /retry and /redo.
 
     Pearl supermatches get the "drunk draft" cover letter: rougher and more
-    creative on purpose, since those get rewritten by hand anyway.
+    creative on purpose, since those get rewritten by hand anyway. kind
+    "drunk" (the /drunk command) forces that mode for any job.
     """
     from candidate_profile import is_pearl
 
-    drunk = bool(job) and is_pearl(job)
-    if kind == "cl":
+    drunk = kind == "drunk" or (bool(job) and is_pearl(job))
+    if kind in ("cl", "drunk"):
         generate_cover_letter(
             job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
@@ -322,6 +352,12 @@ def _cmd_cl(args, ctx):
         _gen(ctx, "cl", r[0], r[1], r[2], extra=r[3])
 
 
+def _cmd_drunk(args, ctx):
+    r = _resolve_target(args, ctx)
+    if r:
+        _gen(ctx, "drunk", r[0], r[1], r[2], extra=r[3])
+
+
 def _cmd_resume(args, ctx):
     r = _resolve_target(args, ctx)
     if r:
@@ -332,6 +368,48 @@ def _cmd_apply(args, ctx):
     r = _resolve_target(args, ctx)
     if r:
         _gen(ctx, "apply", r[0], r[1], r[2], extra=r[3])
+
+
+def _cmd_applied(args, ctx):
+    """Record that Milo applied to a job, then exit the shell.
+
+    Stored as an "applied" decision in job_decisions.json (same store as TUI
+    swipes, synced across devices), so the job never shows up in a deck again.
+    Exiting returns to the TUI deck when the shell was opened from a card,
+    otherwise it quits the app.
+    """
+    r = _resolve_target(args, ctx)
+    if r is None:
+        return
+    job, url, role_desc = r[0], r[1], r[2]
+    from tui import _push_decision, load_decisions, norm_url, save_decisions
+
+    if job:
+        key = norm_url(job.get("url")) or f"{job.get('company')}|{job.get('title')}"
+        company, title = job.get("company", ""), job.get("title", "")
+    elif url:
+        key = norm_url(url)
+        company, title = extract_job_meta(role_desc)
+    else:  # pasted description: key by company|title, like URL-less jobs
+        company, title = extract_job_meta(role_desc)
+        if company == "Unknown":
+            print("   Can't identify this pasted job — mark it with a job #, @name, or URL.")
+            return
+        key = f"{company}|{title}"
+    decisions = load_decisions()
+    decisions[key] = {
+        "decision": "applied",
+        "title": title,
+        "company": company,
+        "ts": time.strftime("%Y-%m-%d %H:%M"),
+    }
+    save_decisions(decisions)
+    _push_decision(key, decisions[key])
+    print(f"\n   ✓ Applied: {title} @ {company} — stored & synced. Good luck! 🍀")
+    remaining = len(ctx.queue) - ctx.queue_pos
+    if remaining > 0:
+        print(f"   (heads up: {remaining} liked job(s) were still queued — see `jobs` next time)")
+    return False
 
 
 def _cmd_salary(args, ctx):
@@ -398,10 +476,36 @@ def _cmd_unset(args, ctx):
     print("   Active job cleared.")
 
 
+def _load_liked_queue(ctx) -> int:
+    """Fill ctx.queue with liked-but-not-applied jobs from disk. Returns the count."""
+    from tui import liked_from_csv, load_decisions
+
+    ctx.queue = liked_from_csv(load_decisions())
+    ctx.queue_pos = 0
+    return len(ctx.queue)
+
+
+def _cmd_liked(args, ctx):
+    """List liked-but-not-applied jobs (right-swipes) and queue them for /next."""
+    from candidate_profile import is_pearl
+
+    if not _load_liked_queue(ctx):
+        print("   No liked jobs waiting — swipe right on some in `jobfinder --tui`.")
+        return
+    print(f"\n   ♥ {len(ctx.queue)} liked job(s) not applied to yet:")
+    for job in ctx.queue:
+        num = f"#{job['_num']}" if job.get("_num") else ""
+        pearl = "🦪 " if is_pearl(job) else ""
+        print(f"      {num:>4}  {pearl}{job.get('title', '?')} @ {job.get('company', '?')}")
+    print("   Queued — /next steps through them; /applied checks one off.")
+
+
 def _cmd_next(args, ctx):
-    """Advance to the next liked job from the TUI queue and make it the active job."""
+    """Advance to the next liked job from the queue and make it the active job."""
+    if not ctx.queue and _load_liked_queue(ctx):
+        print(f"   ♥ Loaded {len(ctx.queue)} liked job(s) from your earlier swipes.")
     if not ctx.queue:
-        print("   No liked-jobs queue. Start one with `jobfinder --tui`.")
+        print("   No liked jobs waiting — swipe right on some in `jobfinder --tui`.")
         return
     if ctx.queue_pos >= len(ctx.queue):
         print(f"   🎉 All {len(ctx.queue)} liked jobs handled. Queue finished.")
@@ -441,8 +545,11 @@ def _cmd_paste(args, ctx):
         print("   Nothing pasted.")
         return
     company, title = extract_job_meta(pasted)
-    ctx.session = {"job": None, "role_desc": pasted, "url": "", "label": f"{company} - {title}"}
+    job = _register_pasted_job(pasted, company, title)
+    ctx.session = {"job": job, "role_desc": pasted, "url": "", "label": f"{company} - {title}"}
     print(f"   Active job set: {ctx.session['label']}")
+    if job:
+        print("   Saved to jobs.csv (synced) — /applied will remember it across devices.")
     print("   Commands without a #/url now use this job.")
 
 
@@ -460,6 +567,28 @@ def _cmd_open(args, ctx):
         return
     print(f"   Opening {os.path.basename(target)}")
     _os_open(target)
+
+
+def _cmd_pdf(args, ctx):
+    """Redo the docx → pdf conversion (same as `jobfinder -p`)."""
+    from resume_tailor import docx_to_pdf
+
+    path = args.strip().strip("'\"")
+    if not path:
+        path = _latest_application_file(".docx")
+        if not path:
+            print("   No .docx files found in applications/.")
+            return
+        print(f"   Converting: {os.path.basename(path)}")
+    if not os.path.isfile(path):
+        print(f"   File not found: {path}")
+        return
+    if not path.lower().endswith(".docx"):
+        print(f"   Expected a .docx file, got: {path}")
+        return
+    pdf = docx_to_pdf(path, os.path.dirname(os.path.abspath(path)))
+    if pdf:
+        print(f"   Saved: {pdf}")
 
 
 def _cmd_status(args, ctx):
@@ -579,6 +708,14 @@ def _build_registry():
             True,
         ),
         Command(
+            "drunk",
+            _cmd_drunk,
+            "Cover letter as a drunk draft (what pearls get)",
+            "drunk [#|@name|url] [- extra]",
+            ("dcl", "drunk-cl"),
+            True,
+        ),
+        Command(
             "resume",
             _cmd_resume,
             "Tailor your resume to a role",
@@ -592,6 +729,14 @@ def _build_registry():
             "Cover letter + tailored resume",
             "apply [#|@name|url] [- extra]",
             (),
+            True,
+        ),
+        Command(
+            "applied",
+            _cmd_applied,
+            "Mark a job as applied (stored + synced), then exit",
+            "applied [#|@name|url]",
+            ("did",),
             True,
         ),
         Command(
@@ -611,11 +756,19 @@ def _build_registry():
             True,
         ),
         Command("jobs", _cmd_jobs, "List saved jobs from jobs.csv", "jobs", ("list", "ls", "show")),
-        Command("next", _cmd_next, "Step to the next liked job (TUI queue)", "next", ("n",)),
+        Command("liked", _cmd_liked, "List liked jobs not yet applied to; queue them", "liked"),
+        Command("next", _cmd_next, "Step to the next liked job", "next", ("n",)),
         Command("set", _cmd_set, "Set the active session job", "set <#|@name|url>"),
         Command("unset", _cmd_unset, "Clear the active session job", "unset"),
         Command("paste", _cmd_paste, "Paste a job description (END to finish)", "paste"),
         Command("open", _cmd_open, "Open the latest generated document", "open [docx|pdf|dir]"),
+        Command(
+            "pdf",
+            _cmd_pdf,
+            "Convert a docx to pdf (default: latest)",
+            "pdf [docx_path]",
+            ("to-pdf", "topdf"),
+        ),
         Command("status", _cmd_status, "Show the active job + jobs.csv count", "status", ("st",)),
         Command("retry", _cmd_retry, "Re-run the last generation", "retry"),
         Command("redo", _cmd_redo, "Re-run last generation with extra guidance", "redo <extra>"),
@@ -748,9 +901,12 @@ def _absorb_paste(first_line, ctx):
         extra.pop()
     full = (first_line + "\n" + "\n".join(extra)).strip()
     company, title = extract_job_meta(full)
-    ctx.session = {"job": None, "role_desc": full, "url": "", "label": f"{company} - {title}"}
+    job = _register_pasted_job(full, company, title)
+    ctx.session = {"job": job, "role_desc": full, "url": "", "label": f"{company} - {title}"}
     print(f"\n   Detected pasted job description ({len(full.split())} words).")
     print(f"   Active job set: {ctx.session['label']}")
+    if job:
+        print("   Saved to jobs.csv (synced) — /applied will remember it across devices.")
     print("   Use /cl, /resume, /apply, or /salary to generate documents.")
     return True
 
@@ -801,7 +957,10 @@ def _run_interactive(liked_queue: list | None = None, initial_job: dict | None =
             "label": f"{company} - {title}",
         }
         print(f"   Active job: {ctx.session['label']}")
-        print("   /cl /resume /apply /salary use it · /exit returns to the deck.\n")
+        print(
+            "   /cl /resume /apply /salary use it · /applied marks it done"
+            " · /exit returns to the deck.\n"
+        )
 
     while True:
         try:
@@ -853,12 +1012,17 @@ Search:
 Interactive mode (enter with -i): a slash-command shell. A leading '/' is
 optional, so `cl 5` and `/cl 5` are identical. Type /help inside for the full
 list; Tab completes commands & job numbers, ↑/Ctrl+R recall history (persisted).
-  next               step to the next liked job from the TUI queue
+  liked              list liked-but-not-applied jobs and queue them
+  next               step to the next liked job (loads earlier swipes if no queue)
   set <#|@name|url>  set the active job — commands then default to it
-  paste              paste a job description directly (type END when done)
+  paste              paste a job description directly (type END when done;
+                     identified postings are saved to jobs.csv + synced)
   cl / resume / apply / salary [#|@name|url] [- extra]   generate documents
+  drunk [#|@name|url]  cover letter as a drunk draft (what pearls get by default)
+  applied [#|@name|url]  mark a job as applied (stored + synced), then exit
   answer [#]: <q>    answer an application question      aq: <q>   (no job context)
   retry / redo <x>   re-run the last generation (redo appends extra guidance)
+  pdf [docx_path]    redo the docx → pdf conversion (default: latest docx)
   open [docx|pdf|dir]  open the latest generated file    status   show session
   jobs               numbered job list                   !<cmd>   run a shell command
 

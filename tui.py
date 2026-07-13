@@ -689,7 +689,13 @@ def swipe_screen(term, deck, decisions):
                     _run_interactive(initial_job=job)
                 except (KeyboardInterrupt, EOFError):
                     pass
-            # back to the deck, same card
+            # Back to the deck, same card — unless the shell decided it
+            # (e.g. /applied), then move on to the next one.
+            decisions.update(load_decisions())
+            card_key = norm_url(job.get("url")) or f"{job.get('company')}|{job.get('title')}"
+            if card_key in decisions:
+                undo, expanded, scroll = None, None, 0
+                i += 1
         elif key in ("q", "ESC"):
             break
     return liked
@@ -761,6 +767,27 @@ def _undecided_from_csv(decisions):
     return deck
 
 
+def liked_from_csv(decisions) -> list:
+    """Liked-but-not-yet-applied saved jobs (decision "yes"), numbered like `jobs`.
+
+    Backs the menu's "Apply to liked jobs" and the shell's /liked and /next
+    fallback, so yesterday's right-swipes are still actionable today.
+    """
+    try:
+        from cover_letter import load_jobs_from_csv
+
+        rows = load_jobs_from_csv()
+    except Exception:
+        rows = []
+    liked = []
+    for n, row in enumerate(rows, 1):
+        key = norm_url(row.get("url")) or f"{row.get('company')}|{row.get('title')}"
+        if decisions.get(key, {}).get("decision") == "yes":
+            row["_num"] = n
+            liked.append(row)
+    return liked
+
+
 # --- main -------------------------------------------------------------------------------
 
 
@@ -778,6 +805,7 @@ def run_tui():
     with Term() as term:
         splash_screen(term)
         while True:
+            liked_waiting = len(liked_from_csv(decisions))
             choice = menu_select(
                 term,
                 "🌱 Climate & Green Tech Job Finder",
@@ -785,12 +813,29 @@ def run_tui():
                     "Search my target-role profile",
                     "Search a specific role",
                     "Review undecided saved jobs",
+                    f"Apply to liked jobs{f' (♥ {liked_waiting})' if liked_waiting else ''}",
                     "Quit",
                 ],
                 footer="↑/↓ move · Enter select · q quit",
             )
-            if choice in (None, 3):
+            if choice in (None, 4):
                 return None
+
+            if choice == 3:  # liked-but-not-applied jobs → interactive queue
+                liked = liked_from_csv(decisions)
+                if liked:
+                    return liked
+                cols = term.size()[0]
+                term.render(
+                    [
+                        "",
+                        _center("No liked jobs waiting — swipe right on some first. 💚", cols),
+                        "",
+                        _center(f"{DIM}press any key{RESET}", cols),
+                    ]
+                )
+                term.read_key()
+                continue
 
             if choice == 2:
                 deck = _undecided_from_csv(decisions)

@@ -1045,7 +1045,8 @@ CSV_COLUMNS = [
 
 
 def save_jobs(jobs: list, filepath: str = "jobs.csv", _push: bool = True) -> dict:
-    """Save job dicts to CSV, deduplicating by normalized URL against existing rows.
+    """Save job dicts to CSV, deduplicating by normalized URL against existing rows
+    (URL-less rows, e.g. pasted job descriptions, dedupe by company + title).
 
     New rows are also pushed to the cross-device sync DB (sync.py) in the
     background, unless _push=False (used by sync_down itself to avoid loops).
@@ -1064,13 +1065,24 @@ def save_jobs(jobs: list, filepath: str = "jobs.csv", _push: bool = True) -> dic
         def norm_url(u):
             return (u or "").split("?")[0].strip().rstrip("/")
 
+        def ct_key(j):
+            return (
+                (j.get("company") or "").strip().lower(),
+                (j.get("title") or "").strip().lower(),
+            )
+
         existing_urls = {norm_url(j.get("url")) for j in existing}
+        existing_ct = {ct_key(j) for j in existing if not norm_url(j.get("url"))}
         new_rows, skipped = [], 0
         for job in jobs:
             u = norm_url(job.get("url"))
             if u and u not in existing_urls:
                 new_rows.append(job)
                 existing_urls.add(u)
+            elif not u and all(ct_key(job)) and ct_key(job) not in existing_ct:
+                # URL-less rows (pasted job descriptions) dedupe by company+title.
+                new_rows.append(job)
+                existing_ct.add(ct_key(job))
             else:
                 skipped += 1
 
