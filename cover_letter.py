@@ -1,16 +1,20 @@
 """Cover letter and application question generation.
 
-Cover letters and application questions use Claude Sonnet 4.6 (Anthropic) with streaming.
-Salary estimates use Claude Haiku (Anthropic).
+Cover letters and application questions use Claude Sonnet 4.6 (Anthropic) in two passes:
+a draft, then a self-critique pass that hunts AI tells and streams the rewrite.
+Salary estimates use Claude Haiku (Anthropic), single pass.
 Uses the candidate's resume and style guide as context. Supports job selection from CSV,
 URL-based job descriptions, and interactive commands.
 """
 
 import csv
+import json
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 
 import anthropic
 import trafilatura
@@ -117,16 +121,115 @@ def list_jobs_brief() -> str:
 # URL fetching
 # ---------------------------------------------------------------------------
 
+# Fetched descriptions are cached on disk so the TUI card previews, the deck's
+# full-description view, and later /cl / /apply runs only hit the site once.
+DESCRIPTIONS_CACHE_PATH = os.path.join(_project_root, "job_descriptions.json")
 
-def fetch_job_description(url: str) -> str:
-    """Extract clean text from a job posting URL using trafilatura."""
+_desc_cache: dict | None = None
+_desc_cache_lock = threading.Lock()
+
+
+def _desc_cache_key(url: str) -> str:
+    return (url or "").split("?")[0].strip().rstrip("/")
+
+
+def _load_desc_cache() -> dict:
+    global _desc_cache
+    if _desc_cache is None:
+        try:
+            with open(DESCRIPTIONS_CACHE_PATH, "r", encoding="utf-8") as f:
+                _desc_cache = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            _desc_cache = {}
+    return _desc_cache
+
+
+def _fetch_via_jina(url: str) -> str:
+    """Fallback text extraction through r.jina.ai (renders JS-heavy pages)."""
     try:
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            return trafilatura.extract(downloaded) or ""
+        import requests
+
+        resp = requests.get(
+            f"https://r.jina.ai/{url}",
+            headers={"X-Return-Format": "text"},
+            timeout=25,
+        )
+        if resp.status_code == 200 and len(resp.text.strip()) > 200:
+            return resp.text.strip()
     except Exception:
         pass
     return ""
+
+
+# A failed fetch is cached too (empty description) and only retried this often,
+# so unfetchable postings don't hit the network on every search / card view.
+_FAILED_FETCH_RETRY_DAYS = 7
+
+
+def _cache_entry_usable(entry: dict) -> bool:
+    """True if a cache entry answers the question (success, or a recent failure)."""
+    if entry.get("description"):
+        return True
+    try:
+        fetched = time.mktime(time.strptime(entry.get("fetched", ""), "%Y-%m-%d %H:%M"))
+    except (ValueError, OverflowError):
+        return False  # legacy empty entry without a usable timestamp: retry
+    return (time.time() - fetched) < _FAILED_FETCH_RETRY_DAYS * 86400
+
+
+def fetch_job_description(url: str, use_cache: bool = True) -> str:
+    """Extract clean text from a job posting URL — fetched once, then re-used.
+
+    Resolution order: local on-disk cache → cross-device sync DB (another
+    device may have fetched it already) → direct fetch (trafilatura) →
+    r.jina.ai rendering proxy for pages that resist direct fetching.
+    Every outcome is cached locally (failures retry after a week); successful
+    fetches are pushed to the sync DB so other devices never re-fetch.
+    """
+    key = _desc_cache_key(url)
+    if use_cache and key:
+        with _desc_cache_lock:
+            entry = _load_desc_cache().get(key)
+        if entry and _cache_entry_usable(entry):
+            return entry.get("description", "")
+
+    text = ""
+    try:
+        from sync import get_remote_description
+
+        text = get_remote_description(url) or ""
+    except Exception:
+        pass
+
+    fetched_here = False
+    if not text:
+        try:
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                text = trafilatura.extract(downloaded) or ""
+        except Exception:
+            pass
+        if len(text.strip()) < 200:  # empty or boilerplate-only: try the hard way
+            text = _fetch_via_jina(url) or text
+        fetched_here = bool(text)
+
+    if key:
+        with _desc_cache_lock:
+            cache = _load_desc_cache()
+            cache[key] = {
+                "description": text,  # empty = negative cache entry
+                "fetched": time.strftime("%Y-%m-%d %H:%M"),
+            }
+            with open(DESCRIPTIONS_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2, ensure_ascii=False)
+        if text and fetched_here:
+            try:
+                from sync import push_description_async
+
+                push_description_async(url, text)
+            except Exception:
+                pass
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +261,20 @@ DO NOT sound like AI or LinkedIn. Never use:
 - Em-dashes (—)
 - Buzzwords: "leverage", "synergies", "impact-driven", "stakeholder", "fast-paced environment", "team player"
 - The dramatic backwards setup: "[description of company/product] — that's exactly the kind of X I want to be doing/building."
+- "not just X, but Y" / "not only... but also" constructions
+- Rule-of-three lists ("clear, focused, and effective")
+- Hedged openers: "I believe that...", "I feel that..."
+- "resonates", "aligns with my values", "genuinely excites me"
+- Ending every paragraph on a tidy punchline
+
+SOUND LIKE A PERSON:
+- Vary the rhythm. A long winding sentence, then a short one. Fragments are fine.
+- AI writes every sentence at the same medium length with neat parallel structure. Don't.
+- Include one or two touches of real character: a dry aside, a parenthetical remark, a concrete opinion about the company's product or problem.
+- Starting a sentence with "And", "But" or "Which" is fine. So is a mild colloquialism.
+- Small imperfections are human: a slightly informal construction, a thought that runs on a bit. But NEVER spelling errors or typos.
+- Don't polish every transition; people jump between thoughts.
+- It should read like it was typed in one sitting by someone sharp who means it, not assembled by committee.
 
 RULES:
 - 150-220 words. Short paragraphs.
@@ -187,12 +304,52 @@ DO NOT sound like AI or LinkedIn. Never use:
 - "I am a strong communicator/collaborator..."
 - "This opportunity excites me because..."
 - Buzzwords: "leverage", "synergies", "impact-driven", "stakeholder", "team player"
+- "not just X, but Y" / "not only... but also" constructions
+- Rule-of-three lists ("clear, focused, and effective")
+- Hedged openers: "I believe that...", "I feel that..."
+- "resonates", "aligns with my values", "genuinely excites me"
+
+SOUND LIKE A PERSON:
+- Vary the rhythm. A long winding sentence, then a short one. Fragments are fine.
+- AI writes every sentence at the same medium length with neat parallel structure. Don't.
+- A dry aside, a parenthetical remark, or a concrete opinion is welcome where it fits.
+- Starting a sentence with "And", "But" or "Which" is fine. So is a mild colloquialism.
+- Small imperfections are human: a slightly informal construction, a thought that runs on a bit. But NEVER spelling errors or typos.
+- It should read like someone sharp answering honestly, not performing for a form.
 
 RULES:
 - 50-200 words depending on the question. Shorter is usually better.
 - Only draw from the resume. Never fabricate experience.
 - Answer the actual question directly — don't warm up to it.
 """
+
+
+# Appended to the cover-letter system prompt for "pearl" supermatches: a rough,
+# riskier single-pass draft that Milo will rewrite by hand anyway — lower polish
+# on purpose, because a slightly-off draft is easier to rework than a slick one.
+_DRUNK_ADDENDUM = """
+
+PEARL MODE — this company is a dream match, and this draft is deliberately a rough
+one: Milo will rewrite it by hand. So loosen up and swing harder than usual:
+- Take creative risks. An unexpected opening, a weird-but-apt metaphor, an
+  opinionated hot take on their product or market. If a line makes you hesitate
+  "is this too much?" — keep it.
+- Be funnier and more personal than feels safe. Overshoot the voice rather than
+  undershoot it.
+- A half-finished thought or a missing transition is fine. Interesting beats
+  polished. Do NOT sand the edges afterwards.
+- The banned-phrases list still applies, and the facts must still come straight
+  from the resume. Wild delivery, true content.
+- 150-260 words."""
+
+
+_REVISE_INSTRUCTION = """Now re-read your draft as a skeptical editor who can smell AI writing a mile off.
+Hunt for: uniform sentence rhythm, symmetric constructions, tidy punchline endings,
+rule-of-three lists, generic claims that could appear in anyone's application,
+anything performed rather than said, and any banned pattern that slipped through.
+Rewrite it, fixing what you find and keeping what already sounds human. Keep the
+same facts and roughly the same length. Output ONLY the final text — no commentary,
+no explanation of what you changed."""
 
 
 # ---------------------------------------------------------------------------
@@ -231,36 +388,81 @@ def _build_job_context(job: dict | None, extra_description: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
-def _stream_response(system_prompt: str, user_prompt: str, header: str) -> str:
-    """Stream a Claude Sonnet 4.6 response with word count footer. Returns full text."""
+def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: bool = True) -> str:
+    """Claude Sonnet 4.6 generation with word count footer. Returns full text.
+
+    Default is two passes: pass 1 writes a draft; pass 2 re-reads it as a
+    skeptical editor hunting AI tells and streams the rewrite. The system prompt
+    (style guide + resume) is cache-marked so the second pass reuses it. If the
+    revision pass fails, the draft is used as-is. With revise=False (pearl /
+    "drunk draft" mode) the first pass streams directly, unpolished.
+    """
     client = _get_anthropic_client()
 
     print("\n" + "=" * 60)
     print(f"   {header}")
     print("=" * 60 + "\n")
 
+    system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+    messages = [{"role": "user", "content": user_prompt}]
+    draft_text = ""
     full_text = ""
 
     try:
-        with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
-            for text in stream.text_stream:
-                full_text += text
-                print(text, end="", flush=True)
+        if not revise:
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=system,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    full_text += text
+                    print(text, end="", flush=True)
+        else:
+            print("   Drafting...", flush=True)
+            draft = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=system,
+                messages=messages,
+            )
+            draft_text = "".join(b.text for b in draft.content if b.type == "text")
+            messages += [
+                {"role": "assistant", "content": draft_text},
+                {"role": "user", "content": _REVISE_INSTRUCTION},
+            ]
+            print("   Rereading for AI tells...\n", flush=True)
+
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=system,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    full_text += text
+                    print(text, end="", flush=True)
 
     except anthropic.AuthenticationError:
         print("\nError: Invalid ANTHROPIC_API_KEY. Check your .env file.")
         return ""
     except anthropic.APIConnectionError:
         print("\nError: Could not connect to Anthropic API.")
-        return ""
+        if draft_text and not full_text:
+            print("   Revision failed; using the draft as-is.\n")
+            print(draft_text)
+            full_text = draft_text
+        else:
+            return ""
     except anthropic.APIError as e:
         print(f"\nAPI error: {e}")
-        return ""
+        if draft_text and not full_text:
+            print("   Revision failed; using the draft as-is.\n")
+            print(draft_text)
+            full_text = draft_text
+        else:
+            return ""
 
     word_count = len(full_text.split())
     print("\n")
@@ -298,14 +500,16 @@ def extract_job_meta(text: str, job: dict | None = None) -> tuple[str, str]:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=60,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Extract the hiring company name and job title from the text below. "
-                    "Reply with exactly this format (no extra words): COMPANY | ROLE\n\n"
-                    + text[:3000]
-                ),
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Extract the hiring company name and job title from the text below. "
+                        "Reply with exactly this format (no extra words): COMPANY | ROLE\n\n"
+                        + text[:3000]
+                    ),
+                }
+            ],
         )
         parts = response.content[0].text.strip().split("|")
         if len(parts) >= 2:
@@ -363,9 +567,18 @@ def _save_cover_letter_pdf(text: str, filename_stem: str) -> str:
 
 
 def generate_cover_letter(
-    job: dict | None = None, extra_context: str = "", url: str = "", description: str = ""
+    job: dict | None = None,
+    extra_context: str = "",
+    url: str = "",
+    description: str = "",
+    drunk: bool = False,
 ):
-    """Generate and stream a cover letter for a job."""
+    """Generate and stream a cover letter for a job.
+
+    drunk=True (used for pearl supermatches) skips the self-critique polish
+    pass and prompts for a rougher, riskier single draft — raw material to
+    rewrite by hand, not a finished letter.
+    """
     extra_description = description
     if url:
         print("   Fetching job description...")
@@ -386,7 +599,11 @@ def generate_cover_letter(
     # Resolve company/role for header and filename
     company, title = extract_job_meta(job_context, job)
     header = f"Cover Letter: {title} @ {company}"
-    text = _stream_response(_cover_letter_system_prompt(), user_prompt, header)
+    system_prompt = _cover_letter_system_prompt()
+    if drunk:
+        header += "   🦪 pearl · drunk draft"
+        system_prompt += _DRUNK_ADDENDUM
+    text = _stream_response(system_prompt, user_prompt, header, revise=not drunk)
 
     if text:
         _save_cover_letter_pdf(text, make_output_stem("CL", company, title))
@@ -450,9 +667,7 @@ def estimate_salary(job: dict | None = None, url: str = "", description: str = "
     print("\n" + "=" * 60)
 
 
-def answer_application_question(
-    question: str, job: dict | None = None, url: str = ""
-):
+def answer_application_question(question: str, job: dict | None = None, url: str = ""):
     """Generate and stream an answer to an application question."""
     extra_description = ""
     if url:
@@ -559,9 +774,7 @@ def parse_command(user_input: str) -> dict | None:
             return {"action": "salary", "job_number": job_number, "url": url}
 
     # --- Cover letter: "cl ..." / "cover letter ..." ---
-    cl_match = re.match(
-        r"^(?:cl|cover\s*letter)\s*(?:for\s+job\s+)?(.+)", text, re.IGNORECASE
-    )
+    cl_match = re.match(r"^(?:cl|cover\s*letter)\s*(?:for\s+job\s+)?(.+)", text, re.IGNORECASE)
     if cl_match:
         rest = cl_match.group(1).strip()
         job_number = None

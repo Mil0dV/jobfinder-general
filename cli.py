@@ -158,6 +158,9 @@ class _Ctx:
         self.session: dict | None = None
         # Last generation, for /retry and /redo.
         self.last_gen: dict | None = None
+        # Liked jobs handed over by the TUI; /next steps through them.
+        self.queue: list = []
+        self.queue_pos: int = 0
 
 
 # --- target resolution (#, @name, url, or the active session job) ------------
@@ -186,6 +189,37 @@ def _resolve_mention(text: str) -> dict | None:
     return matches[0][1]
 
 
+def _register_url_job(url: str, role_desc: str):
+    """Save a URL used in the shell as a job row (and sync it across devices).
+
+    Skipped when jobs.csv already knows the URL, so extract_job_meta's Haiku
+    call only happens for genuinely new postings.
+    """
+    try:
+        norm = (url or "").split("?")[0].strip().rstrip("/")
+        known = {
+            (j.get("url") or "").split("?")[0].strip().rstrip("/") for j in load_jobs_from_csv()
+        }
+        if not norm or norm in known:
+            return
+        company, title = extract_job_meta(role_desc)
+        from datetime import date
+
+        from agent import save_jobs
+
+        job = {
+            "title": title,
+            "company": company,
+            "url": url,
+            "posted_date": date.today().isoformat(),
+            "source": "shared",
+            "_desc": role_desc,
+        }
+        save_jobs([job])  # dedupes, writes jobs.csv, pushes to the sync DB
+    except Exception:
+        pass
+
+
 def _resolve_target_core(target: str) -> tuple[dict | None, str, str] | None:
     """Resolve a single token (#|@name|url) to (job, url, role_desc), or None."""
     target = target.strip()
@@ -204,6 +238,7 @@ def _resolve_target_core(target: str) -> tuple[dict | None, str, str] | None:
         _job, role_desc = _resolve_job_context({"url": target})
         if not role_desc:
             return None
+        _register_url_job(target, role_desc)
         return None, target, role_desc
     print(f"   Don't understand '{target}'. Use a job number, @name, or URL.")
     return None
@@ -245,16 +280,23 @@ def _resolve_target(args: str, ctx: _Ctx) -> tuple[dict | None, str, str, str] |
 
 
 def _gen(ctx, kind, job, url, role_desc, extra="", question=None):
-    """Run a generation and remember it for /retry and /redo."""
+    """Run a generation and remember it for /retry and /redo.
+
+    Pearl supermatches get the "drunk draft" cover letter: rougher and more
+    creative on purpose, since those get rewritten by hand anyway.
+    """
+    from candidate_profile import is_pearl
+
+    drunk = bool(job) and is_pearl(job)
     if kind == "cl":
         generate_cover_letter(
-            job, extra_context=extra, url=url, description=role_desc if not url else ""
+            job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
     elif kind == "resume":
         tailor_resume(role_desc, extra_context=extra)
     elif kind == "apply":
         generate_cover_letter(
-            job, extra_context=extra, url=url, description=role_desc if not url else ""
+            job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
         tailor_resume(role_desc, extra_context=extra)
     elif kind == "salary":
@@ -354,6 +396,32 @@ def _cmd_set(args, ctx):
 def _cmd_unset(args, ctx):
     ctx.session = None
     print("   Active job cleared.")
+
+
+def _cmd_next(args, ctx):
+    """Advance to the next liked job from the TUI queue and make it the active job."""
+    if not ctx.queue:
+        print("   No liked-jobs queue. Start one with `jobfinder --tui`.")
+        return
+    if ctx.queue_pos >= len(ctx.queue):
+        print(f"   🎉 All {len(ctx.queue)} liked jobs handled. Queue finished.")
+        return
+    job = ctx.queue[ctx.queue_pos]
+    ctx.queue_pos += 1
+    _job, role_desc = _resolve_job_context({"job": job})
+    company, title = extract_job_meta(role_desc, job)
+    ctx.session = {
+        "job": job,
+        "role_desc": role_desc,
+        "url": "",
+        "label": f"{company} - {title}",
+    }
+    remaining = len(ctx.queue) - ctx.queue_pos
+    print(f"\n   [{ctx.queue_pos}/{len(ctx.queue)}] Active job: {ctx.session['label']}")
+    print(
+        "   /cl /resume /apply /salary use it · /next for the following one"
+        + (f" ({remaining} left)" if remaining else " (last one!)")
+    )
 
 
 def _cmd_paste(args, ctx):
@@ -543,6 +611,7 @@ def _build_registry():
             True,
         ),
         Command("jobs", _cmd_jobs, "List saved jobs from jobs.csv", "jobs", ("list", "ls", "show")),
+        Command("next", _cmd_next, "Step to the next liked job (TUI queue)", "next", ("n",)),
         Command("set", _cmd_set, "Set the active session job", "set <#|@name|url>"),
         Command("unset", _cmd_unset, "Clear the active session job", "unset"),
         Command("paste", _cmd_paste, "Paste a job description (END to finish)", "paste"),
@@ -709,11 +778,30 @@ def _print_banner():
     print("  · A leading '/' is optional — `cl 5` and `/cl 5` are identical.\n")
 
 
-def _run_interactive():
-    """Run the interactive document-generation shell."""
+def _run_interactive(liked_queue: list | None = None, initial_job: dict | None = None):
+    """Run the interactive document-generation shell.
+
+    `initial_job` (a job dict, e.g. the card the TUI's apply key was pressed on)
+    becomes the active session job; exiting the shell returns to the caller.
+    """
     ctx = _Ctx()
+    if liked_queue:
+        ctx.queue = liked_queue
     _setup_readline()
     _print_banner()
+    if ctx.queue:
+        print(f"   ♥ {len(ctx.queue)} liked job(s) queued from the TUI — type /next to start.\n")
+    if initial_job is not None:
+        _job, role_desc = _resolve_job_context({"job": initial_job})
+        company, title = extract_job_meta(role_desc, initial_job)
+        ctx.session = {
+            "job": initial_job,
+            "role_desc": role_desc,
+            "url": "",
+            "label": f"{company} - {title}",
+        }
+        print(f"   Active job: {ctx.session['label']}")
+        print("   /cl /resume /apply /salary use it · /exit returns to the deck.\n")
 
     while True:
         try:
@@ -751,6 +839,10 @@ Usage:
 
 Search:
   job_titles                    comma-separated titles, e.g. "PM,Engineer"
+  --tui                         full-screen TUI: search (profile or role, with
+                                location history), swipe through results with
+                                ←/→ (u = undo), then write applications for the
+                                liked jobs in interactive mode
   --profile                     search all target roles from candidate_profile.py
                                 (Head of Product, CTO, founding engineer, EiR, ...)
   -l / --location  LOCATION     filter by location
@@ -761,6 +853,7 @@ Search:
 Interactive mode (enter with -i): a slash-command shell. A leading '/' is
 optional, so `cl 5` and `/cl 5` are identical. Type /help inside for the full
 list; Tab completes commands & job numbers, ↑/Ctrl+R recall history (persisted).
+  next               step to the next liked job from the TUI queue
   set <#|@name|url>  set the active job — commands then default to it
   paste              paste a job description directly (type END when done)
   cl / resume / apply / salary [#|@name|url] [- extra]   generate documents
@@ -812,6 +905,7 @@ def main():
     parser.add_argument("-e", "--experience", default="", choices=["", "entry", "mid", "senior"])
     parser.add_argument("-i", "--interactive", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--tui", action="store_true")
     parser.add_argument(
         "-c", "--cover-letter", "--cl", metavar="JOB|URL", default=None, dest="cover_letter"
     )
@@ -826,6 +920,15 @@ def main():
 
     if args.help:
         print(_HELP)
+        return
+
+    # --- TUI: search → swipe → interactive mode over the liked jobs ---
+    if args.tui:
+        from tui import run_tui
+
+        liked = run_tui()
+        if liked:
+            _run_interactive(liked_queue=liked)
         return
 
     # --- Docx to PDF conversion ---

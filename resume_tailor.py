@@ -7,7 +7,6 @@ then rebuilds the docx with the original styling and converts to PDF.
 import copy
 import json
 import os
-import re
 import subprocess
 import sys
 from io import BytesIO
@@ -356,9 +355,54 @@ STYLE REFERENCE (for tone):
 {style_guide}
 
 OUTPUT FORMAT:
-Return ONLY valid JSON matching the exact structure of the input resume data. \
-Do not wrap in markdown code fences. Do not add commentary. \
-Return the complete structure — unchanged sections included verbatim."""
+Return the complete resume structure — unchanged sections included verbatim. \
+No commentary."""
+
+
+# JSON schema enforced via output_config.format so the API guarantees the
+# response is the resume structure itself (no prose preamble to parse around).
+_STR_ARRAY = {"type": "array", "items": {"type": "string"}}
+RESUME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "contact": {"type": "string"},
+        "professional_statement": {"type": "string"},
+        "core_competencies": {"type": "string"},
+        "technical_skills": {"type": "string"},
+        "experiences": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "subtitle": {"type": "string"},
+                    "scope": _STR_ARRAY,
+                    "achievements": _STR_ARRAY,
+                },
+                "required": ["title", "subtitle", "scope", "achievements"],
+                "additionalProperties": False,
+            },
+        },
+        "earlier_roles": _STR_ARRAY,
+        "education": _STR_ARRAY,
+        "languages": {"type": "string"},
+        "interests": {"type": "string"},
+    },
+    "required": [
+        "name",
+        "contact",
+        "professional_statement",
+        "core_competencies",
+        "technical_skills",
+        "experiences",
+        "earlier_roles",
+        "education",
+        "languages",
+        "interests",
+    ],
+    "additionalProperties": False,
+}
 
 
 def get_tailored_resume(role_description: str) -> dict:
@@ -371,9 +415,10 @@ def get_tailored_resume(role_description: str) -> dict:
         name=base.get("name") or "the candidate", style_guide=style_guide
     )
 
+    payload = {k: v for k, v in base.items() if k in RESUME_SCHEMA["properties"]}
     user_msg = f"""Here is the current resume data (JSON):
 
-{json.dumps(base, indent=2, ensure_ascii=False)}
+{json.dumps(payload, indent=2, ensure_ascii=False)}
 
 Here is the role description to tailor for:
 
@@ -385,17 +430,17 @@ Return the tailored resume as JSON."""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=8192,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
+        output_config={"format": {"type": "json_schema", "schema": RESUME_SCHEMA}},
     )
 
-    text = response.content[0].text.strip()
+    if response.stop_reason == "max_tokens":
+        print("Error: Claude's response was cut off before the full resume was returned.")
+        sys.exit(1)
 
-    # Strip markdown fences if present
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
+    text = next(b.text for b in response.content if b.type == "text")
 
     try:
         return json.loads(text)
@@ -454,7 +499,8 @@ def show_edits(original: dict, tailored: dict):
                 _note(name, desc)
         elif isinstance(orig, list) and isinstance(new, list):
             n_changed = sum(
-                1 for o, n in zip(orig, new)
+                1
+                for o, n in zip(orig, new)
                 if isinstance(o, str) and isinstance(n, str) and o.strip() != n.strip()
             )
             added = len(new) - len(orig)

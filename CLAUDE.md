@@ -14,6 +14,7 @@ uv sync                    # Install dependencies
 uv sync --extra dev        # Install with dev tools (pytest, black, ruff)
 
 # Run
+uv run python cli.py --tui                                        # Full-screen TUI: search → swipe → apply
 uv run python cli.py --profile -l "Switzerland"                   # Search all target roles (recommended)
 uv run python cli.py "Software Engineer"                          # Basic search
 uv run python cli.py "Data Scientist" --location "Switzerland"    # With location
@@ -56,8 +57,9 @@ The codebase is a single-module Python application with two entry points:
 
 - **`cli.py`** — argparse CLI that parses job titles (comma-separated), location, job-type, experience level, `--profile`, `--interactive`, and `--cover-letter`/`--cl` flags. `--profile` runs `run_profile_search()` (deterministic, no agent loop); free-text titles go through the agent from `agent.py`. Cover letter commands come from `cover_letter.py`.
 - **`agent.py`** — Contains everything else: the custom agentic loop, all source scrapers, LLM validation, and agent initialization.
+- **`tui.py`** — Full-screen terminal UI (`cli.py --tui`), hand-rolled ANSI/termios (no extra deps). Splash screen (ASCII witch with notepad, skipped on terminals under 72×25) → menu → search (profile or role, location picker with history in `.jobfinder_tui.json`) → animated progress (driven by `search_jobs`'s `_progress` callback; library prints are swallowed via a devnull stdout swap while `Term` owns the screen) → tinder-style card deck (`→` like / `←` pass / `u` undo within 5s / `d` description / `c` company info / `o` open browser / `a` apply now; pearls sort first and carry a magenta 🦪 banner). Cards show as much of the role description as fits the screen (prefetched for the next few cards; fetched text is cached on disk in `job_descriptions.json` via `cover_letter.fetch_job_description`, shared with the shell's `/cl`/`/apply`). `a` suspends the TUI (`Term.suspend()`) and drops into the interactive shell with that job active (`_run_interactive(initial_job=...)`); exiting the shell returns to the same card. Decisions persist per normalized URL in `job_decisions.json`; undecided saved jobs can be reviewed from the menu (liveness is checked during search, so the deck opens instantly). Liked jobs are returned to `cli.py`, which enters the interactive shell with them queued (`/next` steps through).
 - **`candidate_profile.py`** — The candidate's target-role profile: `TARGET_ROLES` (human-readable, fed to LLM validation), `ROLE_PATTERNS` (regex families for local title filtering), `EXCLUDE_PATTERNS` (interns, volunteers, recruiting spam), and `PROFILE_QUERY_SEEDS` (short queries for sources with server-side search). Edit this file to change what a "fit" job is.
-- **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Streams output with thinking indicator. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
+- **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Two-pass generation: a silent draft, then a self-critique pass (`_REVISE_INSTRUCTION`) that rereads the draft for AI tells (uniform rhythm, symmetric constructions, banned phrases) and streams the rewrite; the system prompt (style guide + resume) is cache-marked so pass 2 reuses it, and a failed revision falls back to the draft. Pearl supermatches instead get a single-pass "drunk draft" (`drunk=True`, `_DRUNK_ADDENDUM`): rougher and riskier on purpose, since those get rewritten by hand. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
 - **`resume_tailor.py`** — Resume tailoring using Claude. Makes minimal, natural edits to match a role description. Builds a styled docx matching the original Resume.pdf layout, converts to PDF via LibreOffice. Interactive command: `resume <job#>` or `resume <url>`.
 
 ### Interactive Shell (`cli.py`)
@@ -83,7 +85,8 @@ Manual tool-use loop against the Anthropic Messages API (`claude-opus-4-8`, adap
 
 ### Tool Functions in `agent.py`
 
-- **`search_jobs(query, location, ...)`** — Unified entry point. Empty query or `"profile"` searches the full target-role profile. Queries all nine sources in parallel, filters titles via `_title_matches()` (profile regexes or free-text query), dedupes by URL and (company, title), drops jobs older than `max_age_days` (default 90), batch-validates with LLM, keeps jobs with `fit_score >= 3` and `climate_score >= 2`, sorted by fit → climate → recency.
+- **`search_jobs(query, location, ...)`** — Unified entry point. Empty query or `"profile"` searches the full target-role profile. Queries all nine sources in parallel, filters titles via `_title_matches()` (profile regexes or free-text query), dedupes by URL and (company, title), drops jobs older than `max_age_days` (default 90), verifies postings are still online, fetches full descriptions in parallel (`fetch_descriptions`, attached as runtime-only `_desc`, disk-cached in `job_descriptions.json`), batch-validates with LLM (which scores the full description, not just the feed snippet), keeps jobs with `fit_score >= 3` and `climate_score >= 2`, sorted pearls-first → fit → climate → startup → recency. Accepts an internal `_progress(phase, done, total, detail)` callback (used by the TUI; underscore params are excluded from agent tool schemas).
+- **`verify_jobs_online(jobs)`** — Parallel liveness check for postings older than `VERIFY_AGE_DAYS` (30); runs inside `search_jobs` right after dedup, before description fetching and LLM validation. A posting counts as offline ONLY on a definitive 404/410 or an ATS soft-404 (200-redirect to the board root with `?error=true` / job-id path segment gone). Crawl refusals (401/403/405/429), bot walls, server errors, and timeouts get the benefit of the doubt and are kept.
 - **`search_arbeitnow()`** — EU/DACH-focused, free API.
 - **`search_remoteok()`** — Remote-only jobs from RemoteOK JSON feed.
 - **`search_adzuna()`** — Multi-country API; requires `ADZUNA_APP_ID` and `ADZUNA_API_KEY` env vars. In profile mode fans out over `PROFILE_QUERY_SEEDS`.
@@ -92,9 +95,9 @@ Manual tool-use loop against the Anthropic Messages API (`claude-opus-4-8`, adap
 - **`search_climatebase()`** — Climatebase.org (~14k climate jobs) via its public search-only Algolia index (credentials extracted from their frontend; if they rotate, re-extract from the `_app-*.js` bundle). Fans out over `PROFILE_QUERY_SEEDS`, filters by country facet + Remote.
 - **`search_jobsincarbon()`** — Jobs in Carbon niceboard via its sitemap; fetches matching job pages for real titles.
 - **`search_remoteimpact()`** — Remote Impact's climate & environment category (HTML parsing).
-- **`validate_jobs_batch()`** — Sends jobs in batches of 15 (6 parallel workers) to `claude-haiku-4-5` with a JSON-schema-constrained response (`output_config.format`), falling back to source-based priors if the API is unavailable (climate-only boards get climate=4). Scores `fit` (0–5 vs. candidate profile) and `climate` (0–5 company mission) with a one-line `reason`.
+- **`validate_jobs_batch()`** — Sends jobs in batches of 15 (6 parallel workers) to `claude-haiku-4-5` with a JSON-schema-constrained response (`output_config.format`), falling back to source-based priors if the API is unavailable (climate-only boards get climate=4). Scores `fit` (0–5 role: tech focus, product/vision ownership, team leadership), `startup` (0–5 startup-ness: 5 = scrappy startup, 0 = bureaucratic enterprise), and `climate` (0–5 company mission) with a one-line `reason`. A **pearl** (supermatch) is all three ≥ 4 with sum ≥ 13 (`candidate_profile.is_pearl`); pearls sort first in both decks, get a 🦪 banner, and their cover letters come as "drunk drafts" (see cover_letter.py).
 - **`get_company_info()`** — DuckDuckGo search for company sustainability info; cached in `company_cache.json`.
-- **`save_jobs()` / `save_csv()`** — Appends to `jobs.csv`, deduplicates by normalized URL, handles dynamic columns. CSV columns include `fit_score`, `climate_score`, `reason`.
+- **`save_jobs()` / `save_csv()`** — Appends to `jobs.csv`, deduplicates by normalized URL, handles dynamic columns. CSV columns include `fit_score`, `startup_score`, `climate_score`, `reason`.
 
 ### Data Flow
 
@@ -108,8 +111,45 @@ Integrated (all free): Climatebase (public Algolia index — app `8PSNFFQTXQ`, i
 
 Probed but not integrable (checked 2026-07): **remoteclimatejobs.co** is a beehiiv newsletter (jobs only in prose posts); **inclimate.com** serves an empty JS shell with no data API; **cdrjobs.earth** is a Webflow site with client-side-only job data; **welcometothejungle** and **idealist.org** are generalist boards largely covered by Adzuna/Climatebase; **climatehack.global / startup.ch / joinup.ch** have no machine-readable job feeds. Re-probe before assuming this is still true.
 
+## Android App (`android/`)
+
+Kotlin/Compose port of the TUI flow (see `android/README.md`): profile search over
+the same nine sources → tinder-style swipe deck (most-recent-first) → streamed cover
+letter / application answers / salary estimate. Also an `ACTION_SEND` share target:
+share a job URL to the app to start applying. Terminal-look UI (monospace, dark,
+underlined-word buttons) modeled on `tui.py`, including the splash art. Search
+pipeline is a port of `agent.py` (`data/Sources.kt`, `data/SearchEngine.kt`); prompts
+are verbatim from `cover_letter.py` (`data/Generator.kt`). Location policy is fixed
+in `data/Profile.kt`: CH hybrid/remote, DE/NL remote-only. API keys are baked into
+the gitignored `data/Keys.kt` (personal build; `Keys.kt.example` is the template);
+`assets/resume.txt` + `assets/styleguide.md` are gitignored personal assets.
+Build: `export JAVA_HOME=/var/lib/flatpak/app/com.google.AndroidStudio/current/active/files/extra/jbr && cd android && ./gradlew :app:assembleDebug`
+(toolchain mirrors ~/.code/Eigenflow: Gradle 8.13, AGP 8.12, Kotlin 2.0, compileSdk 34).
+
+## Cross-Device Sync (`sync.py`)
+
+Optional Cloud Firestore sync (free tier) shared with the Android app. Backend:
+Firebase project `dog-o-meter` (366421906137), Firestore `(default)` @ eur3, Email/
+Password auth, rules locked to Milo's uid (`firestore.rules`; deploy with
+`npx -y firebase-tools@latest deploy --only firestore`). Collections, with document
+ids `sha1(normalized url | "company|title")`: `jobs` ↔ jobs.csv, `decisions` ↔
+job_decisions.json (last `ts` wins; a swipe on one device hides the job everywhere),
+`descriptions` ↔ job_descriptions.json (pushed on fetch, pulled on cache miss — so a
+page one device can't scrape is served from the other's fetch;
+`fetch_job_description` additionally falls back to the `r.jina.ai` rendering proxy
+for bot-walled/JS-only pages). Python talks Firestore REST (no SDK); the Android app
+uses the Firebase SDK (`data/Sync.kt`) against the same collections. Hooks:
+`save_jobs` pushes new rows (`_push=False` inside sync itself),
+`run_profile_search`/`run_tui` pull first, TUI swipes push in the background, and a
+URL used in the interactive shell (`_register_url_job` in cli.py) becomes a saved job
+with source `shared`. Configured via `FIREBASE_*` in `.env` (see `.env.example`);
+unconfigured = every hook is a silent no-op. `uv run python sync.py` does a full
+two-way sync and prints the auth uid for the rules. `FIREBASE_API_KEY=emulator` +
+`FIRESTORE_EMULATOR_HOST` run it against a local Firestore emulator.
+
 ## Environment Variables
 
 Defined in `.env` (see `.env.example`):
 - `ANTHROPIC_API_KEY` (required — agent loop `claude-opus-4-8`, validation `claude-haiku-4-5`, cover letters, resume tailoring)
 - `ADZUNA_APP_ID` / `ADZUNA_API_KEY` (optional, for Adzuna source)
+- `FIREBASE_API_KEY` / `FIREBASE_PROJECT_ID` / `FIREBASE_EMAIL` / `FIREBASE_PASSWORD` (optional, cross-device sync)

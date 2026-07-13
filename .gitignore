@@ -28,12 +28,14 @@ Resume_*.docx
 Resume_base.docx
 *_jobs.csv
 jobs.csv
+jobs*.csv
 jobs_last.csv
 jobs_old.csv
 
 # Caches & logs
 company_cache.json
 job_cache.json
+job_descriptions.json
 *.log
 
 # Interactive shell history (may contain pasted job text / URLs)
@@ -57,3 +59,19 @@ Thumbs.db
 
 # ADK specific
 .adk/
+
+# TUI state (job decisions + location history)
+job_decisions.json
+.jobfinder_tui.json
+
+# Android app (android/) — build artifacts and personal/secret files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+# Baked-in API keys and personal assets (see Keys.kt.example)
+android/app/src/main/java/dev/milo/jobfinder/data/Keys.kt
+android/app/src/main/assets/styleguide.md
+android/app/google-services.json

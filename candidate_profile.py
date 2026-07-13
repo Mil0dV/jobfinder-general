@@ -67,6 +67,26 @@ PROFILE_QUERY_SEEDS = [
 ]
 
 
+# A "pearl" is a supermatch: strong on all three scores (role fit, startup-ness,
+# climate), with at least one 5 among them. Pearls jump to the front of the deck
+# and get the looser "drunk draft" cover letter treatment.
+PEARL_MIN_EACH = 4
+PEARL_MIN_TOTAL = 13
+
+
+def is_pearl(job: dict) -> bool:
+    """True when a job's three scores make it a supermatch."""
+    try:
+        fit = int(job.get("fit_score"))
+        startup = int(job.get("startup_score"))
+        climate = int(job.get("climate_score"))
+    except (TypeError, ValueError):
+        return False
+    return min(fit, startup, climate) >= PEARL_MIN_EACH and (
+        fit + startup + climate >= PEARL_MIN_TOTAL
+    )
+
+
 def matches_target_roles(title: str) -> bool:
     """True if a job title matches the candidate's target-role profile."""
     if not title:

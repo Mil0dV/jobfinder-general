@@ -1,0 +1,16 @@
+package dev.milo.jobfinder.data
+
+// Copy to Keys.kt and fill in. Keys are baked into the APK on purpose —
+// this app is a personal build that only runs on the owner's phone.
+object Keys {
+    const val ANTHROPIC_API_KEY = "sk-ant-..."
+    const val ADZUNA_APP_ID = "" // optional; blank skips the Adzuna source
+    const val ADZUNA_API_KEY = ""
+
+    // Firebase cross-device sync auth (optional; blank = sync disabled). Same
+    // values as FIREBASE_EMAIL/FIREBASE_PASSWORD in the repo's .env; the project
+    // config lives in app/google-services.json (also gitignored — fetch it with
+    // `npx -y firebase-tools@latest apps:sdkconfig ANDROID <APP_ID>`).
+    const val FIREBASE_EMAIL = ""
+    const val FIREBASE_PASSWORD = ""
+}

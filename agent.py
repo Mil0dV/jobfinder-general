@@ -677,10 +677,11 @@ _VALIDATION_SCHEMA = {
                 "properties": {
                     "id": {"type": "integer"},
                     "fit": {"type": "integer"},
+                    "startup": {"type": "integer"},
                     "climate": {"type": "integer"},
                     "reason": {"type": "string"},
                 },
-                "required": ["id", "fit", "climate", "reason"],
+                "required": ["id", "fit", "startup", "climate", "reason"],
                 "additionalProperties": False,
             },
         }
@@ -730,7 +731,7 @@ def validate_jobs_batch(jobs: list, search_query: str) -> list:
     )
     jobs_text = "".join(
         f"ID {i}: {j.get('title')} at {j.get('company')} ({j.get('location', '?')}) "
-        f"- {j.get('snippet', '')[:200]}\n"
+        f"- {(j.get('_desc') or j.get('snippet') or '')[:1000]}\n"
         for i, j in enumerate(jobs)
     )
     prompt = f"""Evaluate these job postings for a specific candidate.
@@ -743,11 +744,19 @@ JOBS:
 
 Respond with JSON: an "evaluations" array with one object per job ID, each with:
 - id: the job ID from the list above.
-- fit: 0-5. How well the ROLE matches {role_target}.
+- fit: 0-5. How well the ROLE matches {role_target}. Score the role itself:
+  hands-on technical focus, product/vision ownership, and team leadership.
   5 = exact target role at right seniority (e.g. Head of Product, CTO, Founding Engineer,
-      Technical/Platform PM, Director of Engineering, EiR at a startup/scale-up)
-  3 = adjacent role or seniority slightly off (e.g. plain Product Manager, Engineering Manager)
+      Technical/Platform PM, Director of Engineering, EiR) with real ownership
+  3 = adjacent role or seniority slightly off (e.g. plain Product Manager, Engineering
+      Manager), or ownership unclear
   0-1 = wrong role family (sales, marketing, hardware/mechanical, junior roles, internships)
+- startup: 0-5. How startup-like (non-bureaucratic) the COMPANY feels, judged from the
+  posting's tone, company size/stage, and process signals.
+  5 = scrappy startup/scale-up: small team, founders close, fast decisions, ship-first
+  3 = grown-up scale-up: some process and structure, still moves quickly
+  0-1 = big corporate / government / consultancy: layers, committees, enterprise
+        process, compliance-speak, "alignment with stakeholders"
 - climate: 0-5. Climate relevance of the COMPANY/mission.
   5 = core climate mission (carbon removal, renewables, grid, climate SaaS)
   3 = meaningful sustainability angle
@@ -755,7 +764,7 @@ Respond with JSON: an "evaluations" array with one object per job ID, each with:
 - reason: one short sentence.
 
 Example:
-{{"evaluations": [{{"id": 0, "fit": 5, "climate": 4, "reason": "Head of Product at a carbon accounting startup"}}]}}"""
+{{"evaluations": [{{"id": 0, "fit": 5, "startup": 4, "climate": 4, "reason": "Head of Product at a carbon accounting startup"}}]}}"""
 
     results_map = _validation_json(prompt)
     if results_map is None:
@@ -764,6 +773,7 @@ Example:
         return [
             {
                 "fit_score": 3,
+                "startup_score": 3,
                 "climate_score": 4 if j.get("source") in CLIMATE_BOARD_SOURCES else 0,
                 "reason": "unvalidated (no LLM available)",
             }
@@ -774,14 +784,17 @@ Example:
     for i, job in enumerate(jobs):
         res = results_map.get(str(i), {})
         try:
-            fit, climate = int(res.get("fit", 3)), int(res.get("climate", 0))
+            fit = int(res.get("fit", 3))
+            startup = int(res.get("startup", 3))
+            climate = int(res.get("climate", 0))
         except (TypeError, ValueError):
-            fit, climate = 3, 0
+            fit, startup, climate = 3, 3, 0
         if climate == 0 and job.get("source") in CLIMATE_BOARD_SOURCES:
             climate = 3  # climate board listing outranks a missing LLM judgment
         validations.append(
             {
                 "fit_score": fit,
+                "startup_score": startup,
                 "climate_score": climate,
                 "reason": res.get("reason", ""),
             }
@@ -803,6 +816,103 @@ ALL_SOURCES = [
     search_remoteimpact,
 ]
 
+# Postings older than this get an is-it-still-online check during search.
+VERIFY_AGE_DAYS = 30
+_OFFLINE_STATUSES = {404, 410}
+
+
+def verify_jobs_online(
+    jobs: list, verify_unknown_dates: bool = False, _progress=None
+) -> tuple[list, int]:
+    """Drop jobs whose posting URL is definitively gone. Returns (kept, dropped_count).
+
+    Only checks postings older than VERIFY_AGE_DAYS (and, optionally, ones with
+    no parseable date). A posting counts as offline ONLY on a definitive
+    404/410. Crawl refusals (401/403/405/429), bot walls, server errors, and
+    timeouts are NOT evidence the job is gone — those get the benefit of the
+    doubt and the job is kept.
+    """
+    import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def needs_check(job):
+        if not (job.get("url") or "").startswith("http"):
+            return False
+        age = _job_age_days(job.get("posted_date"))
+        if age is None:
+            return verify_unknown_dates
+        return age > VERIFY_AGE_DAYS
+
+    to_check = [j for j in jobs if needs_check(j)]
+    if not to_check:
+        return jobs, 0
+
+    def is_online(job):
+        try:
+            resp = requests.get(
+                job["url"], headers=_HTTP_HEADERS, timeout=8, allow_redirects=True, stream=True
+            )
+            resp.close()
+            if resp.status_code in _OFFLINE_STATUSES:
+                return False
+            # Soft 404s: ATSes 200-redirect dead postings back to the board root
+            # (Greenhouse adds ?error=true; the job-id path segment disappears).
+            if resp.history:
+                final = resp.url or ""
+                if "error=true" in final:
+                    return False
+                segment = job["url"].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+                if len(segment) >= 6 and any(c.isdigit() for c in segment):
+                    if segment not in final:
+                        return False
+            return True
+        except Exception:
+            return True  # network trouble is not evidence the posting is gone
+
+    offline_ids = set()
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = {ex.submit(is_online, j): j for j in to_check}
+        for done, future in enumerate(as_completed(futures), 1):
+            job = futures[future]
+            if not future.result():
+                offline_ids.add(id(job))
+            if _progress:
+                _progress("verify", done, len(to_check), job.get("company", ""))
+
+    kept = [j for j in jobs if id(j) not in offline_ids]
+    if offline_ids:
+        print(f"   Dropped {len(offline_ids)} posting(s) that are no longer online")
+    return kept, len(offline_ids)
+
+
+def fetch_descriptions(jobs: list, _progress=None) -> None:
+    """Fetch the full posting text for each job in parallel, attached as `_desc`.
+
+    Runs during search so LLM validation scores the real description (not just
+    the feed snippet) and the TUI cards can preview it instantly. Fetched text
+    is disk-cached (job_descriptions.json) via cover_letter.fetch_job_description;
+    `_desc` itself is stripped before CSV writes. Jobs whose fetch fails keep
+    only their snippet.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from cover_letter import fetch_job_description
+
+    to_fetch = [j for j in jobs if (j.get("url") or "").startswith("http") and "_desc" not in j]
+    if not to_fetch:
+        return
+
+    def fetch(job):
+        text = fetch_job_description(job["url"])
+        if text:
+            job["_desc"] = text
+
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        futures = {ex.submit(fetch, j): j for j in to_fetch}
+        for done, future in enumerate(as_completed(futures), 1):
+            if _progress:
+                _progress("descriptions", done, len(to_fetch), futures[future].get("company", ""))
+
 
 def search_jobs(
     query: str = "",
@@ -811,6 +921,7 @@ def search_jobs(
     min_fit: int = 3,
     min_climate: int = 2,
     max_age_days: int = 90,
+    _progress=None,
 ) -> dict:
     """Search all job sources in parallel and validate results with an LLM.
 
@@ -839,11 +950,17 @@ def search_jobs(
     all_jobs = []
     with ThreadPoolExecutor(max_workers=len(ALL_SOURCES)) as ex:
         futures = {ex.submit(fn, query, location): fn.__name__ for fn in ALL_SOURCES}
-        for future in as_completed(futures):
+        for done, future in enumerate(as_completed(futures), 1):
+            name = futures[future].removeprefix("search_")
             try:
-                all_jobs.extend(future.result())
+                jobs = future.result()
+                all_jobs.extend(jobs)
+                if _progress:
+                    _progress("sources", done, len(ALL_SOURCES), f"{name}:{len(jobs)}")
             except Exception as e:
                 print(f"   {futures[future]} error: {e}")
+                if _progress:
+                    _progress("sources", done, len(ALL_SOURCES), f"{name}:error")
 
     # Dedupe by normalized URL, then by (company, title)
     seen_urls, seen_keys, unique_jobs = set(), set(), []
@@ -860,29 +977,51 @@ def search_jobs(
             continue
         unique_jobs.append(job)
 
+    # Dead postings out first — no point fetching or scoring roles already filled.
+    unique_jobs, dropped = verify_jobs_online(unique_jobs, _progress=_progress)
+
+    # Full descriptions next: validation scores the real posting text, and the
+    # TUI cards get their previews for free.
+    fetch_descriptions(unique_jobs, _progress=_progress)
+
     print(f"   {len(unique_jobs)} unique recent jobs; validating with LLM...")
 
     batch_size = 15
     batches = [unique_jobs[i : i + batch_size] for i in range(0, len(unique_jobs), batch_size)]
     validated = []
     with ThreadPoolExecutor(max_workers=6) as ex:
-        for batch, validations in zip(
-            batches, ex.map(lambda b: validate_jobs_batch(b, query), batches)
+        for i, (batch, validations) in enumerate(
+            zip(batches, ex.map(lambda b: validate_jobs_batch(b, query), batches)), 1
         ):
             for job, val in zip(batch, validations):
                 job.update(val)
                 if job["fit_score"] >= min_fit and job["climate_score"] >= min_climate:
                     validated.append(job)
+            if _progress:
+                _progress("validate", i, len(batches), f"{len(validated)} kept")
 
-    validated.sort(key=lambda j: (-j["fit_score"], -j["climate_score"], j.get("posted_date", "")))
+    from candidate_profile import is_pearl
+
+    validated.sort(
+        key=lambda j: (
+            not is_pearl(j),  # pearls (supermatches) first
+            -j["fit_score"],
+            -j["climate_score"],
+            -j.get("startup_score", 0),
+            j.get("posted_date", ""),
+        )
+    )
     final = validated[:max_results]
     print(f"   Final: {len(final)} jobs (fit ≥ {min_fit}, climate ≥ {min_climate})")
+    if _progress:
+        _progress("done", 1, 1, f"{len(final)} jobs")
 
     return {
         "status": "success",
         "query": query,
         "location": location,
         "total_found": len(final),
+        "offline_dropped": dropped,
         "jobs": final,
     }
 
@@ -897,6 +1036,7 @@ CSV_COLUMNS = [
     "posted_date",
     "wfh_policy",
     "fit_score",
+    "startup_score",
     "climate_score",
     "reason",
     "source",
@@ -904,8 +1044,12 @@ CSV_COLUMNS = [
 ]
 
 
-def save_jobs(jobs: list, filepath: str = "jobs.csv") -> dict:
-    """Save job dicts to CSV, deduplicating by normalized URL against existing rows."""
+def save_jobs(jobs: list, filepath: str = "jobs.csv", _push: bool = True) -> dict:
+    """Save job dicts to CSV, deduplicating by normalized URL against existing rows.
+
+    New rows are also pushed to the cross-device sync DB (sync.py) in the
+    background, unless _push=False (used by sync_down itself to avoid loops).
+    """
     try:
         if not jobs:
             return {"status": "success", "added": 0}
@@ -937,6 +1081,7 @@ def save_jobs(jobs: list, filepath: str = "jobs.csv") -> dict:
         for j in existing + new_rows:
             all_keys.update(j.keys())
         all_keys.discard("snippet")  # too long for CSV
+        all_keys -= {k for k in all_keys if k.startswith("_")}  # _desc, _num, … are runtime-only
         fieldnames = [k for k in CSV_COLUMNS if k in all_keys] + sorted(
             k for k in all_keys if k not in CSV_COLUMNS
         )
@@ -947,6 +1092,14 @@ def save_jobs(jobs: list, filepath: str = "jobs.csv") -> dict:
             )
             writer.writeheader()
             writer.writerows(existing + new_rows)
+
+        if _push:
+            try:
+                from sync import push_jobs_async
+
+                push_jobs_async(new_rows)
+            except Exception:
+                pass
 
         return {
             "status": "success",
@@ -1018,6 +1171,12 @@ def get_company_info(company_name: str) -> dict:
 
 def run_profile_search(location: str = "", query: str = "") -> None:
     """Deterministic search + save, no agent loop. Used by `cli.py --profile`."""
+    try:
+        from sync import sync_down
+
+        sync_down(verbose=True)
+    except Exception:
+        pass
     result = search_jobs(query=query or PROFILE_QUERY, location=location)
     jobs = result["jobs"]
     saved = save_jobs(jobs)
@@ -1026,11 +1185,14 @@ def run_profile_search(location: str = "", query: str = "") -> None:
         f"({saved.get('skipped', 0)} already known) → jobs.csv"
     )
     if jobs:
-        print("\nTop matches (fit/climate):")
+        from candidate_profile import is_pearl
+
+        print("\nTop matches (fit/startup/climate):")
         for j in jobs[:15]:
+            pearl = "🦪 " if is_pearl(j) else ""
             print(
-                f"  [{j['fit_score']}/{j['climate_score']}] {j['title']} — {j['company']}"
-                f" ({j['location'] or j['wfh_policy']})"
+                f"  {pearl}[{j['fit_score']}/{j.get('startup_score', '?')}/{j['climate_score']}]"
+                f" {j['title']} — {j['company']} ({j['location'] or j['wfh_policy']})"
             )
             print(f"      {j['url']}")
 
@@ -1055,6 +1217,8 @@ class ClaudeAgent:
             signature = inspect.signature(tool)
             input_schema = {"type": "object", "properties": {}, "required": []}
             for name, param in signature.parameters.items():
+                if name.startswith("_"):  # internal-only params (e.g. progress callbacks)
+                    continue
                 p_type = "string"
                 if param.annotation is int:
                     p_type = "integer"
@@ -1122,7 +1286,7 @@ class ClaudeAgent:
 
 
 root_agent = ClaudeAgent(
-    model="claude-opus-4-8",
+    model="claude-sonnet-5",
     system_prompt=f"""You are a job search agent finding climate/green-tech jobs for this candidate:
 
 {CANDIDATE_PROFILE}
@@ -1130,9 +1294,10 @@ root_agent = ClaudeAgent(
 WORKFLOW:
 1. Call search_jobs with the job title (or "profile" to search all the candidate's target
    roles) and optional location. It queries 9 sources in parallel, scores each job for
-   role fit (0-5) and climate relevance (0-5), and returns only good matches.
+   role fit (0-5), startup-ness (0-5), and climate relevance (0-5), and returns only
+   good matches.
 2. Convert results to CSV and call save_csv. Header row:
-   title,company,location,salary,posted_date,wfh_policy,fit_score,climate_score,reason,source,url
+   title,company,location,salary,posted_date,wfh_policy,fit_score,startup_score,climate_score,reason,source,url
 3. Reply with a brief summary: top matches first (highest fit+climate), grouped by source,
    with links.
 

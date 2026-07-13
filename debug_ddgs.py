@@ -2,6 +2,7 @@ from ddgs import DDGS
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
+
 def search(q):
     print(f"Searching for: {q}")
     try:
@@ -13,11 +14,12 @@ def search(q):
         print(f"Error for {q}: {e}")
         return []
 
+
 queries = [
     "Software Engineer jobs Switzerland",
     "Product Manager jobs Germany",
     "Data Scientist jobs Austria",
-    "Climate Tech jobs France"
+    "Climate Tech jobs France",
 ]
 
 start = time.time()

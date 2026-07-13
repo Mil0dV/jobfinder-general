@@ -24,6 +24,9 @@ ADZUNA_API_KEY=...
 ## Job Search
 
 ```bash
+# Full-screen TUI: search, swipe through results, then write applications
+uv run python cli.py --tui
+
 # Search all target roles from candidate_profile.py (recommended)
 uv run python cli.py --profile -l "Switzerland"
 
@@ -59,7 +62,20 @@ Results are saved to `jobs.csv`. Each run appends new jobs (deduped by URL).
 - **welcometothejungle, idealist.org** — generalist boards behind their own search APIs; Adzuna + Climatebase already cover most of their climate listings
 - **climatehack.global, startup.ch, joinup.ch** — community/newsletter sites without machine-readable job feeds
 
-Each job is scored by Claude (Haiku 4.5) for role fit (0–5, against `candidate_profile.py`) and company climate relevance (0–5); only good matches are kept.
+Each job is scored by Claude (Haiku 4.5) for role fit (0–5, against `candidate_profile.py`) and company climate relevance (0–5); only good matches are kept. Postings older than 30 days get a liveness check — definitively dead links (404/410, board-root soft-404s) are dropped, while crawl refusals (403/429/timeouts) get the benefit of the doubt.
+
+---
+
+## TUI
+
+`uv run python cli.py --tui` opens a full-screen terminal UI (greeted by the job witch, who has already made up her mind about you):
+
+1. **Search** — your full target-role profile or a specific role, with a location picker that remembers previous locations (or type a new one).
+2. **Progress animation** — live per-source status, scoring and link-verification phases, and a growing-plant progress bar. 🌱→🌳
+3. **Swipe deck** — one job card at a time: `→` like, `←` pass, `u` undo (5-second window), `d` expands the full role description, `c` expands company info, `o` opens the posting in your browser. Decisions persist in `job_decisions.json`, so each job only has to be judged once.
+4. **Applications** — liked jobs are handed to the interactive shell; `/next` steps through them, making each the active job for `/cl`, `/resume`, `/apply`, `/salary`.
+
+The menu also offers **Review undecided saved jobs** — swipe through everything in `jobs.csv` you haven't judged yet (dead postings are verified out first).
 
 ---
 
