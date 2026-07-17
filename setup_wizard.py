@@ -167,28 +167,35 @@ def _yes(prompt: str, default: bool = False) -> bool:
 
 
 def _ensure_api_key() -> bool:
-    """Make sure ANTHROPIC_API_KEY is available, offering to write it to .env."""
+    """Make sure the active provider's API key is available, offering to write it to .env."""
     load_dotenv()
-    if os.getenv("ANTHROPIC_API_KEY"):
+    import llm
+
+    key_env = llm.api_key_env()
+    if llm.api_key():
         return True
-    print("\nThe wizard uses Claude, so it needs an Anthropic API key")
-    print("(get one at https://console.anthropic.com/settings/keys).")
-    key = _input("Paste your ANTHROPIC_API_KEY (Enter to abort)")
+    if llm.PROVIDER == "anthropic":
+        print("\nThe wizard uses Claude, so it needs an Anthropic API key")
+        print("(get one at https://console.anthropic.com/settings/keys).")
+    else:
+        print(f"\nThe wizard uses {llm.OPENROUTER_MODEL} via OpenRouter, so it needs an API key")
+        print("(get one at https://openrouter.ai/keys).")
+    key = _input(f"Paste your {key_env} (Enter to abort)")
     if not key:
         print("No key provided — aborting setup. Re-run with `cli.py --setup` any time.")
         return False
-    os.environ["ANTHROPIC_API_KEY"] = key
+    os.environ[key_env] = key
     with open(ENV_PATH, "a", encoding="utf-8") as f:
-        f.write(f"\nANTHROPIC_API_KEY={key}\n")
+        f.write(f"\n{key_env}={key}\n")
     print(f"   Saved to {ENV_PATH}.")
     print("   Optional: add ADZUNA_APP_ID / ADZUNA_API_KEY there too (see .env.example).")
     return True
 
 
 def _get_client():
-    import anthropic
+    import llm
 
-    return anthropic.Anthropic()
+    return llm.get_client()
 
 
 def _ingest_resume() -> dict | None:

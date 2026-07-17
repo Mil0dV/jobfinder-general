@@ -17,8 +17,9 @@ import os
 import re
 import sys
 
-import anthropic
 from docx import Document
+
+import llm
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,11 +41,10 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: ANTHROPIC_API_KEY not set.")
+        if not llm.api_key():
+            print(f"Error: {llm.api_key_env()} not set.")
             sys.exit(1)
-        _client = anthropic.Anthropic(api_key=api_key)
+        _client = llm.get_client()
     return _client
 
 

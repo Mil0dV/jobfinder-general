@@ -646,15 +646,17 @@ _VALIDATION_SCHEMA = {
 def _get_anthropic_client():
     global _anthropic_client
     if _anthropic_client is None:
-        import anthropic
+        import llm
 
-        _anthropic_client = anthropic.Anthropic()
+        _anthropic_client = llm.get_client()
     return _anthropic_client
 
 
 def _validation_json(prompt: str) -> dict | None:
-    """Score a validation batch via Claude with a JSON-schema-constrained response."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    """Score a validation batch via the LLM with a JSON-schema-constrained response."""
+    import llm
+
+    if not llm.api_key():
         return None
     try:
         response = _get_anthropic_client().messages.create(
@@ -1166,8 +1168,10 @@ class ClaudeAgent:
     """Manual tool-use loop against the Anthropic Messages API."""
 
     def __init__(self, model="claude-opus-4-8", tools=None, system_prompt=""):
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            print("⚠️ WARNING: ANTHROPIC_API_KEY not found in environment.")
+        import llm
+
+        if not llm.api_key():
+            print(f"⚠️ WARNING: {llm.api_key_env()} not found in environment.")
         self.model = model
         self.tools = tools or []
         self.system_prompt = system_prompt

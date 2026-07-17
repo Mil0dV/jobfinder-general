@@ -17,8 +17,9 @@ import sys
 import threading
 import time
 
-import anthropic
 import trafilatura
+
+import llm
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv
@@ -38,11 +39,10 @@ def _get_anthropic_client():
     """Get or create the shared Anthropic client (for salary estimates)."""
     global _anthropic_client
     if _anthropic_client is None:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: ANTHROPIC_API_KEY not set. Add it to your .env file.")
+        if not llm.api_key():
+            print(f"Error: {llm.api_key_env()} not set. Add it to your .env file.")
             sys.exit(1)
-        _anthropic_client = anthropic.Anthropic(api_key=api_key)
+        _anthropic_client = llm.get_client()
     return _anthropic_client
 
 
@@ -538,18 +538,18 @@ def _stream_response(
                     full_text += text
                     print(text, end="", flush=True)
 
-    except anthropic.AuthenticationError:
-        print("\nError: Invalid ANTHROPIC_API_KEY. Check your .env file.")
+    except llm.AuthError:
+        print(f"\nError: Invalid {llm.api_key_env()}. Check your .env file.")
         return ""
-    except anthropic.APIConnectionError:
-        print("\nError: Could not connect to Anthropic API.")
+    except llm.NetworkError:
+        print("\nError: Could not connect to the LLM API.")
         if draft_text and not full_text:
             print("   Revision failed; using the draft as-is.\n")
             print(draft_text)
             full_text = draft_text
         else:
             return ""
-    except anthropic.APIError as e:
+    except llm.APIError as e:
         print(f"\nAPI error: {e}")
         if draft_text and not full_text:
             print("   Revision failed; using the draft as-is.\n")
@@ -762,13 +762,13 @@ def estimate_salary(job: dict | None = None, url: str = "", description: str = "
         ) as stream:
             for text in stream.text_stream:
                 print(text, end="", flush=True)
-    except anthropic.AuthenticationError:
-        print("\nError: Invalid ANTHROPIC_API_KEY. Check your .env file.")
+    except llm.AuthError:
+        print(f"\nError: Invalid {llm.api_key_env()}. Check your .env file.")
         return
-    except anthropic.APIConnectionError:
-        print("\nError: Could not connect to Anthropic API.")
+    except llm.NetworkError:
+        print("\nError: Could not connect to the LLM API.")
         return
-    except anthropic.APIError as e:
+    except llm.APIError as e:
         print(f"\nAPI error: {e}")
         return
 

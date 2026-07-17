@@ -168,6 +168,8 @@ two-way sync and prints the auth uid for the rules. `FIREBASE_API_KEY=emulator` 
 ## Environment Variables
 
 Defined in `.env` (see `.env.example`):
-- `ANTHROPIC_API_KEY` (required — agent loop `claude-opus-4-8`, validation `claude-haiku-4-5`, cover letters, resume tailoring)
+- `LLM_PROVIDER` — `openrouter` (Kimi K3 via OpenRouter's OpenAI-compatible API) or `anthropic` (Claude). Unset: openrouter if `OPENROUTER_API_KEY` is present, else anthropic. All LLM calls go through `llm.py`, which mimics the Anthropic SDK surface (`messages.create`/`messages.stream`, tool-use blocks, JSON-schema output) over OpenRouter; in openrouter mode the claude-* model names at call sites only pick the tier: opus-tier calls (cover letters, application answers) use `OPENROUTER_MODEL` (default `moonshotai/kimi-k3`), everything else uses `OPENROUTER_FAST_MODEL` (default `deepseek/deepseek-v4-flash`). 429/5xx responses retry with Retry-After-aware backoff.
+- `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_FAST_MODEL` (openrouter mode)
+- `ANTHROPIC_API_KEY` (anthropic mode — agent loop `claude-opus-4-8`, validation `claude-haiku-4-5`, cover letters, resume tailoring)
 - `ADZUNA_APP_ID` / `ADZUNA_API_KEY` (optional, for Adzuna source)
 - `FIREBASE_API_KEY` / `FIREBASE_PROJECT_ID` / `FIREBASE_EMAIL` / `FIREBASE_PASSWORD` (optional, cross-device sync)

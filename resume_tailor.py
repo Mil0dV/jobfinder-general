@@ -11,8 +11,9 @@ import subprocess
 import sys
 from io import BytesIO
 
-import anthropic
 import trafilatura
+
+import llm
 from cover_letter import extract_job_meta, make_output_stem
 from resume_data import RESUME_DOCX_PATH, get_resume_data
 from docx import Document
@@ -35,11 +36,10 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: ANTHROPIC_API_KEY not set.")
+        if not llm.api_key():
+            print(f"Error: {llm.api_key_env()} not set.")
             sys.exit(1)
-        _client = anthropic.Anthropic(api_key=api_key)
+        _client = llm.get_client()
     return _client
 
 
