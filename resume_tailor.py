@@ -322,12 +322,9 @@ def build_resume_docx(data: dict, output_path: str, photo_src: str | None = None
 
 
 def _load_style_guide() -> str:
-    path = os.path.join(_project_root, "Cover-letter styleguide.md")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return ""
+    from cover_letter import _load_style_guide as _cl_style_guide
+
+    return _cl_style_guide()
 
 
 TAILOR_SYSTEM_PROMPT = """\

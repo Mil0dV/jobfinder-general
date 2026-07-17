@@ -1,16 +1,25 @@
 # Climate & Green Tech Job Finder
 
-AI-powered job search across multiple free APIs, with built-in cover letter generation using Claude.
+AI-powered job search across multiple free APIs, with built-in cover letter generation using Claude. Bring your own resume and Anthropic API key; a setup wizard builds a personal search profile around them.
 
 ## Setup
 
-**Requires:** Python 3.10+, [uv](https://docs.astral.sh/uv/)
+**Requires:** Python 3.10+, [uv](https://docs.astral.sh/uv/). Optional: LibreOffice (for PDF conversion of generated documents; docx output works without it).
 
 ```bash
+git clone <this repo> && cd jobfinder
 uv sync
-cp .env.example .env
-# Edit .env and add your API keys
+cp .env.example .env        # add your ANTHROPIC_API_KEY
+uv run python cli.py --setup
 ```
+
+The setup wizard imports your resume (**docx, pdf, or txt**), asks a few questions
+(target roles, seniority, countries, remote preference), and has Claude generate your
+personal search profile — `profile.json`: target roles, title-matching regexes, search
+query seeds, and the location machinery for your countries. It can also build a
+personal cover-letter style guide from 1–2 letters you've written (otherwise a neutral
+built-in style is used). Everything it writes is gitignored personal data; edit
+`profile.json` by hand or re-run `--setup` any time.
 
 **.env keys:**
 ```
@@ -18,6 +27,10 @@ ANTHROPIC_API_KEY=...       # Required — agent, job validation, cover letters,
 ADZUNA_APP_ID=...           # Optional — adds more job results
 ADZUNA_API_KEY=...
 ```
+
+> **Note:** `sync.py` (cross-device Firestore sync), the `android/` app, `.firebaserc`,
+> and `firestore.rules` are the author's personal setup. Sync is a silent no-op unless
+> you configure `FIREBASE_*` variables in `.env` pointing at your own Firebase project.
 
 ---
 
@@ -27,7 +40,7 @@ ADZUNA_API_KEY=...
 # Full-screen TUI: search, swipe through results, then write applications
 uv run python cli.py --tui
 
-# Search all target roles from candidate_profile.py (recommended)
+# Search all target roles from your profile (recommended)
 uv run python cli.py --profile -l "Switzerland"
 
 # Search by role
@@ -62,7 +75,7 @@ Results are saved to `jobs.csv`. Each run appends new jobs (deduped by URL).
 - **welcometothejungle, idealist.org** — generalist boards behind their own search APIs; Adzuna + Climatebase already cover most of their climate listings
 - **climatehack.global, startup.ch, joinup.ch** — community/newsletter sites without machine-readable job feeds
 
-Each job is scored by Claude (Haiku 4.5) for role fit (0–5, against `candidate_profile.py`) and company climate relevance (0–5); only good matches are kept. Postings older than 30 days get a liveness check — definitively dead links (404/410, board-root soft-404s) are dropped, while crawl refusals (403/429/timeouts) get the benefit of the doubt.
+Each job is scored by Claude (Haiku 4.5) for role fit (0–5, against your profile) and company climate relevance (0–5); only good matches are kept. Postings older than 30 days get a liveness check — definitively dead links (404/410, board-root soft-404s) are dropped, while crawl refusals (403/429/timeouts) get the benefit of the doubt.
 
 ---
 
@@ -168,28 +181,33 @@ I've spent the last few years building tools that cut carbon at scale...
 
 ```
 ├── cli.py              # Entry point: argparse CLI + interactive loop
+├── setup_wizard.py     # First-run setup: resume import + profile generation
 ├── agent.py            # Claude agent loop + all job search tools
+├── candidate_profile.py # Loads profile.json (falls back to built-in defaults)
 ├── cover_letter.py     # Cover letter & question generation (Anthropic/Claude)
 ├── resume_tailor.py    # Resume tailoring (Anthropic/Claude) → styled docx/PDF
-├── resume_data.py      # Loads Resume_base.docx → structured resume.json (cached)
+├── resume_data.py      # Loads Resume_base.<docx|pdf|txt> → structured resume.json (cached)
+├── styleguide_default.md # Neutral cover-letter style, used without a personal one
+├── profile.json        # Your search profile, written by --setup (gitignored)
 ├── jobs.csv            # Output: accumulated job results (gitignored)
 ├── Resume_base.docx    # Your resume — the single source of truth (gitignored)
-├── resume.json         # Structured resume, derived from the docx (gitignored)
+├── resume.json         # Structured resume, derived from your resume file (gitignored)
 ├── Cover-letter styleguide.md  # Your writing style guide (context for Claude; gitignored)
 ├── pyproject.toml      # Dependencies
 └── .env.example        # Environment variable template
 ```
 
-> **Note:** `Resume_base.docx`, `resume.json`, `Cover-letter styleguide.md`, generated
-> documents in `applications/`, and `jobs.csv` are gitignored so your personal data stays
-> local. To get started:
+> **Note:** `profile.json`, `Resume_base.*`, `resume.json`, `Cover-letter styleguide.md`,
+> generated documents in `applications/`, and `jobs.csv` are gitignored so your personal
+> data stays local. `cli.py --setup` creates all of them; to do it by hand instead:
 >
-> - Drop your resume in as **`Resume_base.docx`** — this is the single source of truth.
->   On first use it's parsed (by Claude) into `resume.json`, the structured form used for
->   tailoring and cover-letter context. Edit the docx and it's re-parsed automatically.
->   (No docx? Copy `resume.json.example` → `resume.json` and edit it directly instead.)
+> - Drop your resume in as **`Resume_base.docx`** (or `.pdf` / `.txt`) — the single source
+>   of truth. On first use it's parsed (by Claude) into `resume.json`, the structured form
+>   used for tailoring and cover-letter context. Edit it and it's re-parsed automatically.
+>   (No resume file? Copy `resume.json.example` → `resume.json` and edit it directly.)
 > - `Cover-letter styleguide.md.example` → `Cover-letter styleguide.md` (paste a few of
 >   your own cover letters so Claude matches your voice)
+> - Write `profile.json` following the field names in `candidate_profile.py`
 
 ## CLI Reference
 
@@ -203,6 +221,7 @@ Options:
   -l, --location       Location filter (city or country)
   -t, --job-type       full-time | part-time | contract | remote
   -e, --experience     entry | mid | senior
+  --setup              First-time setup wizard (resume import + profile generation)
   --interactive        Drop into interactive mode after search
   --cover-letter N     Generate cover letter for job #N and exit
   --cl N               Alias for --cover-letter

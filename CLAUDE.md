@@ -12,6 +12,7 @@ Climate & Green Tech Job Finder — an AI-powered agent that searches nine free 
 # Setup
 uv sync                    # Install dependencies
 uv sync --extra dev        # Install with dev tools (pytest, black, ruff)
+uv run python cli.py --setup   # First-run wizard: import resume (docx/pdf/txt), generate profile.json
 
 # Run
 uv run python cli.py --tui                                        # Full-screen TUI: search → swipe → apply
@@ -37,15 +38,17 @@ uv run python cli.py -a https://example.com/job                   # Both from UR
 # /cl https://example.com/job — from a URL
 # /resume 5  ·  /apply 5  ·  /salary 5   — tailor resume / CL+resume / salary estimate
 # /drunk 5                    — force the drunk-draft cover letter (pearls get it by default)
-# /applied 5                  — mark a job as applied (stored + synced), then exit the shell
+# /applied 5                  — mark a job as applied (stored + synced); next queued job, else exit
 # /answer 5: Why this company? — answer application question for job #5
-# /aq: Tell me about yourself — answer question without job context
-# /liked  ·  /next            — queue liked-but-not-applied jobs from earlier swipes; step through
+# /aq: Tell me about yourself — answer question without job context (one paragraph)
+# /liked  ·  /next (/n)       — queue liked-but-not-applied jobs from earlier swipes; step through
 # /set 5  ·  /paste           — set an active job (then omit the #); or paste a description
 #                               (pasted/URL jobs not yet in jobs.csv are saved + synced)
 # /retry  ·  /redo make it shorter — re-run the last generation (redo adds guidance)
 # /pdf [docx_path]            — redo the docx → pdf conversion (default: latest docx)
-# /open [docx|pdf|dir]  ·  /status  ·  /jobs  ·  !ls applications  — utilities
+# /open (/o) [docx_path]      — open the last generated docx (or a given file)
+# /url (/u) [#|@name|url]     — open the job posting URL in the browser (default: active job)
+# /status  ·  /jobs  ·  !ls applications  — utilities
 
 # Lint & Format
 black .                    # Format code
@@ -63,9 +66,11 @@ The codebase is a single-module Python application with two entry points:
 - **`cli.py`** — argparse CLI that parses job titles (comma-separated), location, job-type, experience level, `--profile`, `--interactive`, and `--cover-letter`/`--cl` flags. `--profile` runs `run_profile_search()` (deterministic, no agent loop); free-text titles go through the agent from `agent.py`. Cover letter commands come from `cover_letter.py`.
 - **`agent.py`** — Contains everything else: the custom agentic loop, all source scrapers, LLM validation, and agent initialization.
 - **`tui.py`** — Full-screen terminal UI (`cli.py --tui`), hand-rolled ANSI/termios (no extra deps). Splash screen (ASCII witch with notepad, skipped on terminals under 72×25) → menu → search (profile or role, location picker with history in `.jobfinder_tui.json`) → animated progress (driven by `search_jobs`'s `_progress` callback; library prints are swallowed via a devnull stdout swap while `Term` owns the screen) → tinder-style card deck (`→` like / `←` pass / `u` undo within 5s / `d` description / `c` company info / `o` open browser / `a` apply now; pearls sort first and carry a magenta 🦪 banner). Cards show as much of the role description as fits the screen (prefetched for the next few cards; fetched text is cached on disk in `job_descriptions.json` via `cover_letter.fetch_job_description`, shared with the shell's `/cl`/`/apply`). `a` suspends the TUI (`Term.suspend()`) and drops into the interactive shell with that job active (`_run_interactive(initial_job=...)`); exiting the shell returns to the same card — unless the shell decided it (`/applied`), then the deck moves on to the next one. Decisions persist per normalized URL in `job_decisions.json`; undecided saved jobs can be reviewed from the menu (liveness is checked during search, so the deck opens instantly), and the menu's "Apply to liked jobs" (`liked_from_csv`) re-queues liked-but-not-applied jobs from earlier sessions. Liked jobs are returned to `cli.py`, which enters the interactive shell with them queued (`/next` steps through).
-- **`candidate_profile.py`** — The candidate's target-role profile: `TARGET_ROLES` (human-readable, fed to LLM validation), `ROLE_PATTERNS` (regex families for local title filtering), `EXCLUDE_PATTERNS` (interns, volunteers, recruiting spam), and `PROFILE_QUERY_SEEDS` (short queries for sources with server-side search). Edit this file to change what a "fit" job is.
-- **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Two-pass generation: a silent draft, then a self-critique pass (`_REVISE_INSTRUCTION`) that rereads the draft for AI tells (uniform rhythm, symmetric constructions, banned phrases) and streams the rewrite; the system prompt (style guide + resume) is cache-marked so pass 2 reuses it, and a failed revision falls back to the draft. Pearl supermatches instead get a single-pass "drunk draft" (`drunk=True`, `_DRUNK_ADDENDUM`): rougher and riskier on purpose, since those get rewritten by hand; the shell's `/drunk` forces that mode for any job. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
+- **`candidate_profile.py`** — Loader for the candidate's target-role profile. Reads `profile.json` (gitignored; written by `cli.py --setup`, overridable via `JOBFINDER_PROFILE` env var) with hardcoded `_DEFAULT_*` fallbacks so a config-less checkout behaves exactly as before. Exports: `TARGET_ROLES` (human-readable, fed to LLM validation), `ROLE_PATTERNS` (regex families for local title filtering; invalid config regexes are skipped with a warning), `EXCLUDE_PATTERNS` (interns, volunteers, recruiting spam), `PROFILE_QUERY_SEEDS` (short queries for sources with server-side search), `FIT_RUBRIC` (anchors for the validator's 0–5 fit scale), location machinery (`COUNTRY_TERMS`, `ADZUNA_COUNTRIES`/`ADZUNA_DEFAULT`, `CLIMATEBASE_COUNTRIES`, `TIMEZONE`, `SALARY_REGION_HINT`), pearl thresholds, and `DRUNK_MODE_ENABLED` (config default false; fallback true). Edit `profile.json` — or re-run `--setup` — to change what a "fit" job is; a config edit needs a restart (loaded at import).
+- **`setup_wizard.py`** — First-run setup (`cli.py --setup`, auto-offered when neither `profile.json` nor a resume exists): checks/collects `ANTHROPIC_API_KEY`, imports a resume via `resume_data.import_resume()`, asks target roles/seniority/countries/remote/drunk-mode, then a JSON-schema-constrained Claude call generates the full `profile.json` (roles, regexes incl. local-language variants, seeds, fit rubric, location maps — Adzuna codes restricted to Adzuna's real country list; map fields are generated as entry arrays because constrained output forbids schema-valued `additionalProperties`, converted by `_entries_to_maps`). Generated regexes are compile-checked and matched against the user's stated roles; the user can accept / regenerate with feedback / quit. Optionally generates a personal `Cover-letter styleguide.md` from 1–2 sample letters.
+- **`cover_letter.py`** — Cover letter and application question generation using Claude (Anthropic API). Two-pass generation: a silent draft, then a self-critique pass (`_REVISE_INSTRUCTION`) that rereads the draft for AI tells (uniform rhythm, symmetric constructions, banned phrases) and streams the rewrite; the system prompt (style guide + resume) is cache-marked so pass 2 reuses it, and a failed revision falls back to the draft. Pearl supermatches instead get a "drunk draft" (`drunk=True`): a standalone visibly-drunk system prompt (`_drunk_system_prompt` — self-interruptions, tangents, loosening grammar, with sober→drunk few-shot pairs and a banned list of performed-casualness tells like "Honestly..."), followed by a "morning-after" pass (`_DRUNK_TELLCHECK_INSTRUCTION`) that strips AI tells without sobering the letter up and annotates each rewritten line with two inline `[or: … / …]` alternatives to hand-pick from; the automatic pearl→drunk trigger is gated on `candidate_profile.DRUNK_MODE_ENABLED`, while the shell's `/drunk` forces that mode for any job. Without a personal `Cover-letter styleguide.md`, the tracked neutral `styleguide_default.md` is used. Supports job selection from CSV, URL-based job descriptions, and interactive commands (`cl`, `answer`/`aq`, `list jobs`).
 - **`resume_tailor.py`** — Resume tailoring using Claude. Makes minimal, natural edits to match a role description. Builds a styled docx matching the original Resume.pdf layout, converts to PDF via LibreOffice. Interactive command: `resume <job#>` or `resume <url>`.
+- **`resume_data.py`** — Resume loading: the first existing `Resume_base.<docx|pdf|txt>` (or `resume.txt`) is the source of truth, parsed by Claude into `resume.json` and regenerated on content-hash change; a hand-written `resume.json` works without any source file. `import_resume(path)` (used by the wizard) copies an arbitrary docx/pdf/txt into the project root as `Resume_base.<ext>` and parses it. PDF text extraction via `pypdf`.
 
 ### Interactive Shell (`cli.py`)
 
@@ -87,8 +92,9 @@ company + title in `save_jobs`), like shell URLs via `_register_url_job`, so
 `/applied` can track them. `/liked` (and `/next` with no queue) re-queues
 liked-but-not-applied jobs from `job_decisions.json`. `/applied` writes
 an `"applied"` decision to `job_decisions.json` (the TUI swipe store, synced
-across devices) and exits the shell — back to the deck when entered from a TUI
-card (which then advances past it), otherwise out of the app. Ctrl+C cancels a
+across devices); entered from a TUI card (`ctx.from_tui`) it exits the shell
+back to the deck (which then advances past it), with a liked-jobs queue running
+it advances to the next queued job, and otherwise it exits the app. Ctrl+C cancels a
 running generation back to the prompt; Ctrl+C at an empty prompt exits.
 
 ### Agent Loop (`ClaudeAgent` class)

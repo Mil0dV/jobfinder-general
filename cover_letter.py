@@ -1,8 +1,9 @@
 """Cover letter and application question generation.
 
 Cover letters and application questions use Claude Sonnet 4.6 (Anthropic) in two passes:
-a draft, then a self-critique pass that hunts AI tells and streams the rewrite.
-Salary estimates use Claude Haiku (Anthropic), single pass.
+a draft, then a self-critique pass that hunts AI tells and streams the rewrite. Drunk
+drafts (pearl supermatches) use their own system prompt and a morning-after tell check
+instead. Salary estimates use Claude Haiku (Anthropic), single pass.
 Uses the candidate's resume and style guide as context. Supports job selection from CSV,
 URL-based job descriptions, and interactive commands.
 """
@@ -63,7 +64,11 @@ def _load_text_file(filename: str) -> str:
 
 
 def _load_style_guide() -> str:
-    return _load_text_file("Cover-letter styleguide.md")
+    """Personal styleguide when present, else the tracked neutral default."""
+    path = os.path.join(_project_root, "Cover-letter styleguide.md")
+    if os.path.exists(path):
+        return _load_text_file("Cover-letter styleguide.md")
+    return _load_text_file("styleguide_default.md")
 
 
 def _load_resume() -> str:
@@ -237,6 +242,24 @@ def fetch_job_description(url: str, use_cache: bool = True) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Shared by the sober cover-letter prompt and the drunk-mode prompt so the two
+# banned lists can't drift apart.
+_BANNED_PHRASES = """DO NOT sound like AI or LinkedIn. Never use:
+- "I am excited/thrilled/passionate to apply..."
+- "I am confident that I would be a great asset..."
+- "My experience has equipped me with..."
+- "I am eager to contribute to your team..."
+- Any bullet points or list formatting in the letter body
+- Em-dashes (—)
+- Buzzwords: "leverage", "synergies", "impact-driven", "stakeholder", "fast-paced environment", "team player"
+- The dramatic backwards setup: "[description of company/product] — that's exactly the kind of X I want to be doing/building."
+- "not just X, but Y" / "not only... but also" constructions
+- Rule-of-three lists ("clear, focused, and effective")
+- Hedged openers: "I believe that...", "I feel that..."
+- "resonates", "aligns with my values", "genuinely excites me"
+- Ending every paragraph on a tidy punchline"""
+
+
 def _cover_letter_system_prompt() -> str:
     style_guide = _load_style_guide()
     resume = _load_resume()
@@ -252,20 +275,7 @@ STYLE GUIDE AND EXAMPLES:
 RESUME:
 {resume}
 
-DO NOT sound like AI or LinkedIn. Never use:
-- "I am excited/thrilled/passionate to apply..."
-- "I am confident that I would be a great asset..."
-- "My experience has equipped me with..."
-- "I am eager to contribute to your team..."
-- Any bullet points or list formatting in the letter body
-- Em-dashes (—)
-- Buzzwords: "leverage", "synergies", "impact-driven", "stakeholder", "fast-paced environment", "team player"
-- The dramatic backwards setup: "[description of company/product] — that's exactly the kind of X I want to be doing/building."
-- "not just X, but Y" / "not only... but also" constructions
-- Rule-of-three lists ("clear, focused, and effective")
-- Hedged openers: "I believe that...", "I feel that..."
-- "resonates", "aligns with my values", "genuinely excites me"
-- Ending every paragraph on a tidy punchline
+{_BANNED_PHRASES}
 
 SOUND LIKE A PERSON:
 - Vary the rhythm. A long winding sentence, then a short one. Fragments are fine.
@@ -319,28 +329,105 @@ SOUND LIKE A PERSON:
 
 RULES:
 - 50-200 words depending on the question. Shorter is usually better.
+- Answer in ONE paragraph — no line breaks, no lists, no headings.
 - Only draw from the resume. Never fabricate experience.
 - Answer the actual question directly — don't warm up to it.
 """
 
 
-# Appended to the cover-letter system prompt for "pearl" supermatches: a rough,
-# riskier single-pass draft that Milo will rewrite by hand anyway — lower polish
-# on purpose, because a slightly-off draft is easier to rework than a slick one.
-_DRUNK_ADDENDUM = """
+# Standalone system prompt for "drunk draft" mode (pearl supermatches, or forced
+# via /drunk). Deliberately NOT built on top of _cover_letter_system_prompt():
+# appending drunk instructions to the sober template made the model average the
+# two into LinkedIn-with-quirks. Visibly drunk on the page, then de-AI'd by a
+# "morning after" pass (_DRUNK_TELLCHECK_INSTRUCTION) that leaves the drunkness
+# alone. A rough draft the candidate rewrites by hand anyway.
+def _drunk_system_prompt() -> str:
+    style_guide = _load_style_guide()
+    resume = _load_resume()
+    name = _candidate_name()
+    return f"""You are writing a cover letter as {name}, three or four drinks in, to a
+company they genuinely love. Write ONLY the letter text. No preamble, no commentary.
 
-PEARL MODE — this company is a dream match, and this draft is deliberately a rough
-one: Milo will rewrite it by hand. So loosen up and swing harder than usual:
-- Take creative risks. An unexpected opening, a weird-but-apt metaphor, an
-  opinionated hot take on their product or market. If a line makes you hesitate
-  "is this too much?" — keep it.
-- Be funnier and more personal than feels safe. Overshoot the voice rather than
-  undershoot it.
-- A half-finished thought or a missing transition is fine. Interesting beats
-  polished. Do NOT sand the edges afterwards.
-- The banned-phrases list still applies, and the facts must still come straight
-  from the resume. Wild delivery, true content.
-- 150-260 words."""
+The example cover letters in the style guide are {name}'s real sober voice. Start from it;
+borrowing their openers and constructions is welcome. Tonight that voice is drunk: the thinking
+stays sharp, the filter is gone.
+
+STYLE GUIDE AND EXAMPLES:
+{style_guide}
+
+RESUME:
+{resume}
+
+WHAT DRUNK LOOKS LIKE ON THE PAGE (spread these naturally; don't stack them):
+- Self-interruption: a thought breaks off because a better one shoved in ("wait, that's not the point").
+- Doubling back: they return to something a paragraph later because it kept bugging them.
+- Run-ons that ride their own momentum. Then a two-word sentence.
+- One tangent that properly derails, then snaps back to why it matters for THEM.
+- Grammar loosens as the letter goes; the last paragraph reads visibly looser than the first.
+- But NEVER typos, never lowercase drift, never gibberish. Drunk, not blackout.
+- At least one real self-interruption or one derailing tangent must survive into the final
+  letter. A letter with neither isn't drunk yet, it's a person at a desk being careful.
+
+DRUNK IS NOT PERFORMED CASUALNESS. A drunk person doesn't announce honesty or observation, they
+just say the thing. Never use: "Honestly", "Frankly", "Look,", "Here's the thing", "Here's what
+I keep noticing" or any "Here is what..." setup, "I'll be honest", "I'm not gonna lie", "truth be
+told", "let's be real", "real talk", "full disclosure", "I have to say", "God, I love",
+"confession:", or a tacked-on rhetorical "right?". Nor any cousin of these.
+
+{_BANNED_PHRASES}
+
+CONTENT, wherever it naturally falls, not as a checklist (two that land beat three that perform):
+- A hot take about their product or market with a real insight under it. If it might start a
+  friendly argument in the interview, good.
+- The quiet part out loud: the honest reason this company beats the others, or the thing about
+  their space everyone politely ignores.
+- A mildly self-deprecating admission.
+
+BEFORE AND AFTER (the transformation to aim at):
+- Sober: "I spent the better part of last year migrating a legacy platform to AWS using Terraform."
+  Drunk: "I spent a year of my life migrating a legacy platform to AWS, by hand, with Terraform,
+  and I'd do it again, gladly, which tells you something about me a resume can't."
+- Sober: "What draws me to Overstory is the clarity of the problem."
+  Drunk: "Your problem is so clear it's almost unfair. Trees grow. Power lines don't move. Someone
+  has to know which tree wins, and the answer turns out to be satellites, which is the first
+  satellite pitch I've heard that isn't hype in a lab coat."
+- Sober: "This role combines several things I have been working toward."
+  Drunk: "I keep a list of what the next job had to have, an actual note on my phone, and I stopped
+  opening it because nothing ever matched. Wait, that's not the point. The point is your job ad
+  reads like someone leaked the list."
+- Sober: "After years of working with online environments, I've learned to balance change with stability."
+  Drunk: "A decade of ops rewires you, you start seeing failure modes in supermarket queues and
+  single points of failure at family dinners, and none of that is useful to anyone until 3am when
+  the cluster is down and everyone else is guessing. That's the job. I love the job."
+
+RULES:
+- 150-260 words.
+- Only draw from the resume. Never fabricate experience. Drunk delivery, true content.
+- The usual closer ("I look forward to expanding on this in an interview.") may be kept, bent, or
+  dropped. A drunk letter can end mid-gesture.
+"""
+
+
+# Second pass for drunk mode: strips AI tells without sobering the letter up,
+# and annotates each rewritten line with two inline alternatives to pick from.
+_DRUNK_TELLCHECK_INSTRUCTION = """Morning after. Re-read that letter as {name}, sober, coffee in
+hand, who can smell AI writing a mile off. Hunt ONLY for the fake: performed casualness
+("Honestly", "Look,", "Here's the thing", "Here is what I keep noticing", and every cousin of
+these: anything that announces a thought instead of thinking it), recruiter or LinkedIn energy,
+cover-letter template
+structure showing through, uniform sentence rhythm, the checklist smell (hot take + aside +
+admission delivered in polite order), any banned phrase that slipped through.
+
+Do NOT sober it up. The self-interruptions, run-ons, tangents and loose grammar stay exactly as
+they are. You are removing the fake, not the drunk.
+
+Rewrite each line you catch, and append exactly two alternative phrasings to it inline, in square
+brackets: ... [or: <alternative 1> / <alternative 2>]. Phrase the alternatives on the style-guide
+example letters; they are for {name} to pick from while rewriting by hand. Lines you didn't touch
+get no brackets.
+
+Keep the same facts and roughly the same length. Output ONLY the letter with its annotations,
+no commentary."""
 
 
 _REVISE_INSTRUCTION = """Now re-read your draft as a skeptical editor who can smell AI writing a mile off.
@@ -388,14 +475,21 @@ def _build_job_context(job: dict | None, extra_description: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
-def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: bool = True) -> str:
+def _stream_response(
+    system_prompt: str,
+    user_prompt: str,
+    header: str,
+    revise_instruction: str | None = _REVISE_INSTRUCTION,
+    revise_label: str = "Rereading for AI tells...",
+) -> str:
     """Claude Sonnet 4.6 generation with word count footer. Returns full text.
 
-    Default is two passes: pass 1 writes a draft; pass 2 re-reads it as a
-    skeptical editor hunting AI tells and streams the rewrite. The system prompt
-    (style guide + resume) is cache-marked so the second pass reuses it. If the
-    revision pass fails, the draft is used as-is. With revise=False (pearl /
-    "drunk draft" mode) the first pass streams directly, unpolished.
+    Default is two passes: pass 1 writes a draft; pass 2 sends revise_instruction
+    (a skeptical-editor rewrite for sober letters, the morning-after tell check
+    for drunk drafts) and streams the rewrite. The system prompt (style guide +
+    resume) is cache-marked so the second pass reuses it. If the revision pass
+    fails, the draft is used as-is. revise_instruction=None streams the first
+    pass directly, unrevised.
     """
     client = _get_anthropic_client()
 
@@ -409,9 +503,9 @@ def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: 
     full_text = ""
 
     try:
-        if not revise:
+        if revise_instruction is None:
             with client.messages.stream(
-                model="claude-sonnet-4-6",
+                model="claude-opus-4-7",
                 max_tokens=1024,
                 system=system,
                 messages=messages,
@@ -422,7 +516,7 @@ def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: 
         else:
             print("   Drafting...", flush=True)
             draft = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-opus-4-7",
                 max_tokens=1024,
                 system=system,
                 messages=messages,
@@ -430,12 +524,12 @@ def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: 
             draft_text = "".join(b.text for b in draft.content if b.type == "text")
             messages += [
                 {"role": "assistant", "content": draft_text},
-                {"role": "user", "content": _REVISE_INSTRUCTION},
+                {"role": "user", "content": revise_instruction},
             ]
-            print("   Rereading for AI tells...\n", flush=True)
+            print(f"   {revise_label}\n", flush=True)
 
             with client.messages.stream(
-                model="claude-sonnet-4-6",
+                model="claude-opus-4-7",
                 max_tokens=1024,
                 system=system,
                 messages=messages,
@@ -464,7 +558,8 @@ def _stream_response(system_prompt: str, user_prompt: str, header: str, revise: 
         else:
             return ""
 
-    word_count = len(full_text.split())
+    # Don't count the tell-check's inline [or: ...] annotations as letter words.
+    word_count = len(re.sub(r"\[or:.*?\]", "", full_text, flags=re.DOTALL).split())
     print("\n")
     print("=" * 60)
     print(f"   ({word_count} words)")
@@ -575,9 +670,12 @@ def generate_cover_letter(
 ):
     """Generate and stream a cover letter for a job.
 
-    drunk=True (used for pearl supermatches) skips the self-critique polish
-    pass and prompts for a rougher, riskier single draft — raw material to
-    rewrite by hand, not a finished letter.
+    drunk=True (used for pearl supermatches) swaps in the standalone drunk
+    system prompt (visibly drunk: self-interruptions, tangents, loosening
+    grammar) and replaces the polish pass with a morning-after tell check that
+    strips AI tells without sobering the letter up, annotating each rewritten
+    line with two inline [or: .../...] alternatives — raw material to rewrite
+    by hand, not a finished letter.
     """
     extra_description = description
     if url:
@@ -599,13 +697,19 @@ def generate_cover_letter(
     # Resolve company/role for header and filename
     company, title = extract_job_meta(job_context, job)
     header = f"Cover Letter: {title} @ {company}"
-    system_prompt = _cover_letter_system_prompt()
     if drunk:
         from candidate_profile import is_pearl
 
         header += "   🦪 pearl · drunk draft" if job and is_pearl(job) else "   🍸 drunk draft"
-        system_prompt += _DRUNK_ADDENDUM
-    text = _stream_response(system_prompt, user_prompt, header, revise=not drunk)
+        text = _stream_response(
+            _drunk_system_prompt(),
+            user_prompt,
+            header,
+            revise_instruction=_DRUNK_TELLCHECK_INSTRUCTION.format(name=_candidate_name()),
+            revise_label="Morning-after tell check...",
+        )
+    else:
+        text = _stream_response(_cover_letter_system_prompt(), user_prompt, header)
 
     if text:
         _save_cover_letter_pdf(text, make_output_stem("CL", company, title))
@@ -626,9 +730,11 @@ def estimate_salary(job: dict | None = None, url: str = "", description: str = "
         print("Error: No job context provided. Specify a job number or URL.")
         return
 
+    from candidate_profile import SALARY_REGION_HINT
+
     system_prompt = (
         "You are a compensation expert with deep knowledge of tech and climate-tech salaries "
-        "across Europe and globally. Given a job posting, provide a concise salary estimate. "
+        f"across {SALARY_REGION_HINT} and globally. Given a job posting, provide a concise salary estimate. "
         "Structure your answer as:\n"
         "- Estimated range (annual, gross) in the relevant local currency\n"
         "- Key factors influencing the estimate (location, seniority, company type)\n"

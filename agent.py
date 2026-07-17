@@ -13,56 +13,23 @@ import inspect
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-from candidate_profile import CANDIDATE_PROFILE, PROFILE_QUERY_SEEDS, matches_target_roles
+from candidate_profile import (
+    ADZUNA_COUNTRIES,
+    ADZUNA_DEFAULT,
+    CANDIDATE_PROFILE,
+    CLIMATEBASE_COUNTRIES,
+    COUNTRY_TERMS,
+    FIT_RUBRIC,
+    PROFILE_QUERY_SEEDS,
+    TIMEZONE,
+    matches_target_roles,
+)
 
 load_dotenv()
 
 PROFILE_QUERY = "profile"  # sentinel: search for the candidate's target roles
 
 # --- SHARED HELPERS -------------------------------------------------------
-
-COUNTRY_TERMS = {
-    "germany": [
-        "germany",
-        "deutschland",
-        "berlin",
-        "munich",
-        "münchen",
-        "hamburg",
-        "frankfurt",
-        "cologne",
-        "köln",
-        "stuttgart",
-        "leipzig",
-        "de",
-    ],
-    "switzerland": [
-        "switzerland",
-        "schweiz",
-        "suisse",
-        "zurich",
-        "zürich",
-        "geneva",
-        "genf",
-        "basel",
-        "bern",
-        "lausanne",
-        "zug",
-        "ch",
-    ],
-    "austria": ["austria", "österreich", "vienna", "wien", "graz", "linz", "at"],
-    "netherlands": [
-        "netherlands",
-        "nederland",
-        "amsterdam",
-        "rotterdam",
-        "utrecht",
-        "the hague",
-        "eindhoven",
-        "nl",
-    ],
-    "europe": ["europe", "eu", "emea", "european"],
-}
 
 REMOTE_HINTS = ["remote", "anywhere", "distributed", "work from home", "home office"]
 
@@ -214,22 +181,15 @@ def search_adzuna(query: str, location: str = "") -> list:
         print("   Adzuna: skipped (no API key configured)")
         return []
 
-    country_map = {
-        "switzerland": "ch",
-        "germany": "de",
-        "austria": "at",
-        "netherlands": "nl",
-        "uk": "gb",
-        "united kingdom": "gb",
-        "france": "fr",
-        "usa": "us",
-    }
     loc = (location or "").lower()
-    country_code = "ch"
-    for name, code in country_map.items():
+    country_code = ADZUNA_DEFAULT
+    for name, code in ADZUNA_COUNTRIES.items():
         if name in loc or any(city in loc for city in COUNTRY_TERMS.get(name, [])):
             country_code = code
             break
+    if not country_code:
+        print(f"   Adzuna: skipped (no country match for location {location!r})")
+        return []
 
     seeds = PROFILE_QUERY_SEEDS if query == PROFILE_QUERY else [query]
     jobs, seen = [], set()
@@ -243,7 +203,7 @@ def search_adzuna(query: str, location: str = "") -> list:
                 "max_days_old": 60,
                 "sort_by": "date",
             }
-            if location and loc not in (country_map.keys() | {country_code}):
+            if location and loc not in (ADZUNA_COUNTRIES.keys() | {country_code}):
                 params["where"] = location
             resp = requests.get(
                 f"https://api.adzuna.com/v1/api/jobs/{country_code}/search/1",
@@ -410,7 +370,7 @@ def search_climatetechlist(query: str, location: str = "") -> list:
             **_HTTP_HEADERS,
             "X-Requested-With": "XMLHttpRequest",
             "x-airtable-inter-service-client": "webClient",
-            "x-time-zone": "Europe/Zurich",
+            "x-time-zone": TIMEZONE,
         }
         app_id_match = re.search(r'"x-airtable-application-id"\s*:\s*"([^"]*)"', html)
         if app_id_match:
@@ -480,14 +440,6 @@ def search_climatetechlist(query: str, location: str = "") -> list:
 # Public search-only Algolia credentials extracted from climatebase.org's frontend.
 CLIMATEBASE_ALGOLIA_APP = "8PSNFFQTXQ"
 CLIMATEBASE_ALGOLIA_KEY = "d2ebe27d3cc3d35fea04da7b1b0718a8"
-CLIMATEBASE_COUNTRY = {
-    "switzerland": "Switzerland",
-    "germany": "Germany",
-    "austria": "Austria",
-    "netherlands": "Netherlands",
-    "uk": "United Kingdom",
-    "france": "France",
-}
 
 
 def search_climatebase(query: str, location: str = "") -> list:
@@ -503,7 +455,7 @@ def search_climatebase(query: str, location: str = "") -> list:
 
     facet_filters = []
     loc = (location or "").lower()
-    for term, country in CLIMATEBASE_COUNTRY.items():
+    for term, country in CLIMATEBASE_COUNTRIES.items():
         if term in loc or any(city in loc for city in COUNTRY_TERMS.get(term, [])):
             # OR group: jobs in the country, or remote anywhere
             facet_filters = [[f"countries:{country}", "remote_preferences:Remote"]]
@@ -745,12 +697,10 @@ JOBS:
 Respond with JSON: an "evaluations" array with one object per job ID, each with:
 - id: the job ID from the list above.
 - fit: 0-5. How well the ROLE matches {role_target}. Score the role itself:
-  hands-on technical focus, product/vision ownership, and team leadership.
-  5 = exact target role at right seniority (e.g. Head of Product, CTO, Founding Engineer,
-      Technical/Platform PM, Director of Engineering, EiR) with real ownership
-  3 = adjacent role or seniority slightly off (e.g. plain Product Manager, Engineering
-      Manager), or ownership unclear
-  0-1 = wrong role family (sales, marketing, hardware/mechanical, junior roles, internships)
+  {FIT_RUBRIC["criteria"]}.
+  5 = {FIT_RUBRIC["five"]}
+  3 = {FIT_RUBRIC["three"]}
+  0-1 = {FIT_RUBRIC["zero"]}
 - startup: 0-5. How startup-like (non-bureaucratic) the COMPANY feels, judged from the
   posting's tone, company size/stage, and process signals.
   5 = scrappy startup/scale-up: small team, founders close, fast decisions, ship-first

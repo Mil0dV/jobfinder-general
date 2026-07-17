@@ -162,6 +162,9 @@ class _Ctx:
         # Liked jobs handed over by the TUI; /next steps through them.
         self.queue: list = []
         self.queue_pos: int = 0
+        # True when the shell was opened from a TUI card ('a' on the deck);
+        # /applied then exits back to the deck instead of advancing the queue.
+        self.from_tui: bool = False
 
 
 # --- target resolution (#, @name, url, or the active session job) ------------
@@ -311,13 +314,14 @@ def _resolve_target(args: str, ctx: _Ctx) -> tuple[dict | None, str, str, str] |
 def _gen(ctx, kind, job, url, role_desc, extra="", question=None):
     """Run a generation and remember it for /retry and /redo.
 
-    Pearl supermatches get the "drunk draft" cover letter: rougher and more
-    creative on purpose, since those get rewritten by hand anyway. kind
-    "drunk" (the /drunk command) forces that mode for any job.
+    Pearl supermatches get the "drunk draft" cover letter (when drunk_mode is
+    enabled in the profile): rougher and more creative on purpose, since those
+    get rewritten by hand anyway. kind "drunk" (the /drunk command) forces
+    that mode for any job.
     """
-    from candidate_profile import is_pearl
+    from candidate_profile import DRUNK_MODE_ENABLED, is_pearl
 
-    drunk = kind == "drunk" or (bool(job) and is_pearl(job))
+    drunk = kind == "drunk" or (DRUNK_MODE_ENABLED and bool(job) and is_pearl(job))
     if kind in ("cl", "drunk"):
         generate_cover_letter(
             job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
@@ -371,12 +375,13 @@ def _cmd_apply(args, ctx):
 
 
 def _cmd_applied(args, ctx):
-    """Record that Milo applied to a job, then exit the shell.
+    """Record that the user applied to a job.
 
     Stored as an "applied" decision in job_decisions.json (same store as TUI
     swipes, synced across devices), so the job never shows up in a deck again.
-    Exiting returns to the TUI deck when the shell was opened from a card,
-    otherwise it quits the app.
+    Opened from a TUI card, the shell exits back to the deck (which advances
+    past it). With a liked-jobs queue running, it advances to the next queued
+    job instead. Otherwise it exits the shell.
     """
     r = _resolve_target(args, ctx)
     if r is None:
@@ -406,9 +411,15 @@ def _cmd_applied(args, ctx):
     save_decisions(decisions)
     _push_decision(key, decisions[key])
     print(f"\n   ✓ Applied: {title} @ {company} — stored & synced. Good luck! 🍀")
-    remaining = len(ctx.queue) - ctx.queue_pos
-    if remaining > 0:
-        print(f"   (heads up: {remaining} liked job(s) were still queued — see `jobs` next time)")
+    if ctx.from_tui:
+        return False  # back to the TUI deck, which advances past this card
+    if ctx.queue:
+        ctx.session = None
+        if ctx.queue_pos < len(ctx.queue):
+            _cmd_next("", ctx)
+        else:
+            print(f"   🎉 All {len(ctx.queue)} liked jobs handled. Queue finished.")
+        return
     return False
 
 
@@ -523,7 +534,7 @@ def _cmd_next(args, ctx):
     remaining = len(ctx.queue) - ctx.queue_pos
     print(f"\n   [{ctx.queue_pos}/{len(ctx.queue)}] Active job: {ctx.session['label']}")
     print(
-        "   /cl /resume /apply /salary use it · /next for the following one"
+        "   /cl /resume /apply /salary /url use it · /next for the following one"
         + (f" ({remaining} left)" if remaining else " (last one!)")
     )
 
@@ -553,20 +564,33 @@ def _cmd_paste(args, ctx):
     print("   Commands without a #/url now use this job.")
 
 
+def _cmd_url(args, ctx):
+    """Open the job's posting URL in the browser (active job by default)."""
+    r = _resolve_target(args, ctx)
+    if r is None:
+        return
+    job, url, _role_desc, _extra = r
+    url = url or (job.get("url", "") if job else "")
+    if not url:
+        print("   This job has no URL (pasted description?).")
+        return
+    print(f"   Opening {url}")
+    _os_open(url)
+
+
 def _cmd_open(args, ctx):
-    arg = args.strip().lower()
-    apps = os.path.join(os.path.dirname(os.path.abspath(__file__)), "applications")
-    if arg == "dir":
-        _os_open(apps)
+    """Open the last generated docx (or a given file) with the OS default app."""
+    path = args.strip().strip("'\"")
+    if not path:
+        path = _latest_application_file(".docx")
+        if not path:
+            print("   No .docx files found in applications/.")
+            return
+    if not os.path.isfile(path):
+        print(f"   File not found: {path}")
         return
-    ext = {"docx": ".docx", "pdf": ".pdf"}.get(arg)
-    target = _latest_application_file(ext)
-    if not target:
-        kind = f"{arg} " if ext else ""
-        print(f"   No {kind}files found in applications/.")
-        return
-    print(f"   Opening {os.path.basename(target)}")
-    _os_open(target)
+    print(f"   Opening {os.path.basename(path)}")
+    _os_open(path)
 
 
 def _cmd_pdf(args, ctx):
@@ -734,7 +758,7 @@ def _build_registry():
         Command(
             "applied",
             _cmd_applied,
-            "Mark a job as applied (stored + synced), then exit",
+            "Mark a job as applied (stored + synced); next in queue, or exit",
             "applied [#|@name|url]",
             ("did",),
             True,
@@ -761,7 +785,10 @@ def _build_registry():
         Command("set", _cmd_set, "Set the active session job", "set <#|@name|url>"),
         Command("unset", _cmd_unset, "Clear the active session job", "unset"),
         Command("paste", _cmd_paste, "Paste a job description (END to finish)", "paste"),
-        Command("open", _cmd_open, "Open the latest generated document", "open [docx|pdf|dir]"),
+        Command("open", _cmd_open, "Open the last generated docx", "open [docx_path]", ("o",)),
+        Command(
+            "url", _cmd_url, "Open the job URL in the browser", "url [#|@name|url]", ("u",), True
+        ),
         Command(
             "pdf",
             _cmd_pdf,
@@ -948,6 +975,7 @@ def _run_interactive(liked_queue: list | None = None, initial_job: dict | None =
     if ctx.queue:
         print(f"   ♥ {len(ctx.queue)} liked job(s) queued from the TUI — type /next to start.\n")
     if initial_job is not None:
+        ctx.from_tui = True
         _job, role_desc = _resolve_job_context({"job": initial_job})
         company, title = extract_job_meta(role_desc, initial_job)
         ctx.session = {
@@ -1002,7 +1030,8 @@ Search:
                                 location history), swipe through results with
                                 ←/→ (u = undo), then write applications for the
                                 liked jobs in interactive mode
-  --profile                     search all target roles from candidate_profile.py
+  --profile                     search all target roles from your profile
+                                (profile.json — run --setup to create one)
                                 (Head of Product, CTO, founding engineer, EiR, ...)
   -l / --location  LOCATION     filter by location
   -t / --job-type  TYPE         full-time | part-time | contract | remote
@@ -1019,11 +1048,12 @@ list; Tab completes commands & job numbers, ↑/Ctrl+R recall history (persisted
                      identified postings are saved to jobs.csv + synced)
   cl / resume / apply / salary [#|@name|url] [- extra]   generate documents
   drunk [#|@name|url]  cover letter as a drunk draft (what pearls get by default)
-  applied [#|@name|url]  mark a job as applied (stored + synced), then exit
+  applied [#|@name|url]  mark a job as applied (stored + synced); queue → next, else exit
   answer [#]: <q>    answer an application question      aq: <q>   (no job context)
   retry / redo <x>   re-run the last generation (redo appends extra guidance)
   pdf [docx_path]    redo the docx → pdf conversion (default: latest docx)
-  open [docx|pdf|dir]  open the latest generated file    status   show session
+  open [docx_path]   open the last generated docx        url [#]  open the job URL
+  status             show session
   jobs               numbered job list                   !<cmd>   run a shell command
 
 Application:
@@ -1034,6 +1064,8 @@ Application:
   -x / --extra  'TEXT'          extra context / tailoring notes for -c / -r / -s / -a
 
 Utilities:
+  --setup                       first-time setup: import your resume, build your
+                                search profile (profile.json) and style guide
   -p / --to-pdf  [DOCX_PATH]    convert docx → pdf (omit path for last modified in applications/)
   -h / --help                   show this help
 
@@ -1070,6 +1102,7 @@ def main():
     parser.add_argument("-i", "--interactive", action="store_true")
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--tui", action="store_true")
+    parser.add_argument("--setup", action="store_true")
     parser.add_argument(
         "-c", "--cover-letter", "--cl", metavar="JOB|URL", default=None, dest="cover_letter"
     )
@@ -1085,6 +1118,38 @@ def main():
     if args.help:
         print(_HELP)
         return
+
+    # --- First-time setup wizard ---
+    if args.setup:
+        from setup_wizard import run_setup
+
+        try:
+            run_setup()
+        except (KeyboardInterrupt, EOFError):
+            print("\nSetup aborted.")
+        return
+
+    # Offer setup automatically on a fresh install: no profile config AND no resume.
+    from candidate_profile import PROFILE_EXISTS
+
+    if not PROFILE_EXISTS:
+        from resume_data import RESUME_JSON_PATH, RESUME_SOURCE_CANDIDATES
+
+        has_resume = any(os.path.exists(p) for p in RESUME_SOURCE_CANDIDATES + [RESUME_JSON_PATH])
+        if not has_resume:
+            try:
+                answer = input("No profile found — run first-time setup? [Y/n]: ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                print()
+                return
+            if answer in ("", "y", "yes"):
+                from setup_wizard import run_setup
+
+                try:
+                    run_setup()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nSetup aborted.")
+                return
 
     # --- TUI: search → swipe → interactive mode over the liked jobs ---
     if args.tui:

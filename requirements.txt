@@ -1,2 +1,0 @@
-# This file is replaced by pyproject.toml for uv-based dependency management
-# See pyproject.toml for project dependencies

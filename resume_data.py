@@ -1,12 +1,14 @@
-"""Resume data loading — single source of truth is Resume_base.docx.
+"""Resume data loading — single source of truth is Resume_base.<docx|pdf|txt>.
 
-You maintain your resume in Resume_base.docx (Word/LibreOffice). The structured
-resume.json used by the tailoring and cover-letter code is *derived* from it: parsed
-once by Claude and cached. It is regenerated automatically whenever the docx content
-changes, detected via a content hash stored in resume.json under "_source_hash".
+You maintain your resume in a Resume_base file (docx, pdf, or plain text; the setup
+wizard's import_resume() copies your resume here in whatever format you have). The
+structured resume.json used by the tailoring and cover-letter code is *derived* from
+it: parsed once by Claude and cached. It is regenerated automatically whenever the
+source content changes, detected via a content hash stored in resume.json under
+"_source_hash".
 
-If no docx is present, a hand-written resume.json is used as-is (see
-resume.json.example). Both files are gitignored — they're personal data.
+If no source file is present, a hand-written resume.json is used as-is (see
+resume.json.example). All of these files are gitignored — they're personal data.
 """
 
 import hashlib
@@ -25,6 +27,12 @@ _project_root = os.path.dirname(os.path.abspath(__file__))
 
 RESUME_DOCX_PATH = os.path.join(_project_root, "Resume_base.docx")
 RESUME_JSON_PATH = os.path.join(_project_root, "resume.json")
+
+# Possible resume source files, in resolution order; first match wins.
+RESUME_SOURCE_CANDIDATES = [
+    os.path.join(_project_root, name)
+    for name in ["Resume_base.docx", "Resume_base.pdf", "Resume_base.txt", "resume.txt"]
+]
 
 _client = None
 
@@ -93,6 +101,25 @@ def _extract_docx_text(path: str) -> str:
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
+def _extract_pdf_text(path: str) -> str:
+    """Pull the text out of a PDF, page by page."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(path)
+    return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+
+
+def extract_resume_text(path: str) -> str:
+    """Extract plain text from a resume file (.docx, .pdf, or plain text)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".docx":
+        return _extract_docx_text(path)
+    if ext == ".pdf":
+        return _extract_pdf_text(path)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read().strip()
+
+
 def _docx_hash(path: str) -> str:
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -129,11 +156,11 @@ def _parse_resume_text_to_json(text: str) -> dict:
         sys.exit(1)
 
 
-def _generate_json_from_docx(docx_path: str) -> dict:
-    """Parse the docx into resume.json and stamp it with the docx's content hash."""
-    print("   Parsing Resume_base.docx into resume.json with Claude...")
-    data = _parse_resume_text_to_json(_extract_docx_text(docx_path))
-    data["_source_hash"] = _docx_hash(docx_path)
+def _generate_json_from_source(source_path: str) -> dict:
+    """Parse a resume source file into resume.json, stamped with its content hash."""
+    print(f"   Parsing {os.path.basename(source_path)} into resume.json with Claude...")
+    data = _parse_resume_text_to_json(extract_resume_text(source_path))
+    data["_source_hash"] = _docx_hash(source_path)
     with open(RESUME_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     return data
@@ -153,8 +180,8 @@ def get_resume_data() -> dict:
     """Return the structured resume, loading and caching it on first use.
 
     Resolution order:
-      1. Resume_base.docx (source of truth) — derive resume.json from it, regenerating
-         whenever the docx content changes.
+      1. The first existing Resume_base.<docx|pdf|txt> (source of truth) — derive
+         resume.json from it, regenerating whenever the source content changes.
       2. Otherwise, a hand-written resume.json, used as-is.
       3. Otherwise, exit with guidance.
     """
@@ -163,24 +190,50 @@ def get_resume_data() -> dict:
         return _base_resume
 
     cached = _load_cached_json()
+    source_path = next((p for p in RESUME_SOURCE_CANDIDATES if os.path.exists(p)), None)
 
-    if os.path.exists(RESUME_DOCX_PATH):
-        current_hash = _docx_hash(RESUME_DOCX_PATH)
+    if source_path:
+        current_hash = _docx_hash(source_path)
         if cached and cached.get("_source_hash") == current_hash:
             data = cached
         else:
             if cached:
-                print("   Resume_base.docx changed -- regenerating resume.json...")
-            data = _generate_json_from_docx(RESUME_DOCX_PATH)
+                print(f"   {os.path.basename(source_path)} changed -- regenerating resume.json...")
+            data = _generate_json_from_source(source_path)
     elif cached is not None:
         data = cached
     else:
         print(
-            "Error: no resume found. Add your resume as Resume_base.docx, "
-            "or create resume.json (see resume.json.example)."
+            "Error: no resume found. Run `uv run python cli.py --setup`, add your resume "
+            "as Resume_base.docx/.pdf/.txt, or create resume.json (see resume.json.example)."
         )
         sys.exit(1)
 
+    data.pop("_source_hash", None)
+    _base_resume = _validate_resume_data(data)
+    return _base_resume
+
+
+def import_resume(path: str) -> dict:
+    """Import a user-supplied resume (docx/pdf/txt) as the tool's resume source.
+
+    Copies the file into the project root as Resume_base.<ext> (so the usual
+    hash-based regeneration keeps working when it's edited later), parses it
+    into resume.json with Claude, and returns the structured data.
+    """
+    import shutil
+
+    global _base_resume
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".docx", ".pdf", ".txt"):
+        raise ValueError(f"Unsupported resume format {ext!r}; use .docx, .pdf, or .txt")
+
+    dest = os.path.join(_project_root, f"Resume_base{ext}")
+    if os.path.abspath(path) != dest:
+        shutil.copyfile(path, dest)
+
+    data = _generate_json_from_source(dest)
     data.pop("_source_hash", None)
     _base_resume = _validate_resume_data(data)
     return _base_resume
