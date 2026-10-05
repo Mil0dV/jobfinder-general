@@ -23,6 +23,7 @@ from cover_letter import (
     estimate_salary,
     fetch_job_description,
     extract_job_meta,
+    make_output_stem,
 )
 from resume_tailor import tailor_resume
 
@@ -317,22 +318,29 @@ def _gen(ctx, kind, job, url, role_desc, extra="", question=None):
     Pearl supermatches get the "drunk draft" cover letter (when drunk_mode is
     enabled in the profile): rougher and more creative on purpose, since those
     get rewritten by hand anyway. kind "drunk" (the /drunk command) forces
-    that mode for any job.
+    that mode for any job; kind "sober" (the /sober command) forces the
+    regular cover letter even for a pearl.
     """
     from candidate_profile import DRUNK_MODE_ENABLED, is_pearl
 
-    drunk = kind == "drunk" or (DRUNK_MODE_ENABLED and bool(job) and is_pearl(job))
-    if kind in ("cl", "drunk"):
+    if kind == "sober":
+        drunk = False
+    else:
+        drunk = kind == "drunk" or (DRUNK_MODE_ENABLED and bool(job) and is_pearl(job))
+    if kind in ("cl", "drunk", "sober"):
         generate_cover_letter(
             job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
-    elif kind == "resume":
-        tailor_resume(role_desc, extra_context=extra)
+    resume_name = None
+    if job and job.get("company") and job.get("title"):
+        resume_name = make_output_stem("Resume", job["company"], job["title"])
+    if kind == "resume":
+        tailor_resume(role_desc, extra_context=extra, output_name=resume_name)
     elif kind == "apply":
         generate_cover_letter(
             job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
-        tailor_resume(role_desc, extra_context=extra)
+        tailor_resume(role_desc, extra_context=extra, output_name=resume_name)
     elif kind == "salary":
         estimate_salary(job=job, url=url, description=role_desc if not url else "")
     elif kind == "answer":
@@ -362,6 +370,12 @@ def _cmd_drunk(args, ctx):
         _gen(ctx, "drunk", r[0], r[1], r[2], extra=r[3])
 
 
+def _cmd_sober(args, ctx):
+    r = _resolve_target(args, ctx)
+    if r:
+        _gen(ctx, "sober", r[0], r[1], r[2], extra=r[3])
+
+
 def _cmd_resume(args, ctx):
     r = _resolve_target(args, ctx)
     if r:
@@ -387,20 +401,21 @@ def _cmd_applied(args, ctx):
     if r is None:
         return
     job, url, role_desc = r[0], r[1], r[2]
-    from tui import _push_decision, load_decisions, norm_url, save_decisions
+    from tui import _push_decision, job_key, load_decisions, save_decisions
+    from sync import norm_key
 
     if job:
-        key = norm_url(job.get("url")) or f"{job.get('company')}|{job.get('title')}"
         company, title = job.get("company", ""), job.get("title", "")
+        key = job_key(job)
     elif url:
-        key = norm_url(url)
         company, title = extract_job_meta(role_desc)
+        key = norm_key(url, company, title)
     else:  # pasted description: key by company|title, like URL-less jobs
         company, title = extract_job_meta(role_desc)
         if company == "Unknown":
             print("   Can't identify this pasted job — mark it with a job #, @name, or URL.")
             return
-        key = f"{company}|{title}"
+        key = norm_key("", company, title)
     decisions = load_decisions()
     decisions[key] = {
         "decision": "applied",
@@ -421,6 +436,60 @@ def _cmd_applied(args, ctx):
             print(f"   🎉 All {len(ctx.queue)} liked jobs handled. Queue finished.")
         return
     return False
+
+
+def _cmd_inbox(args, ctx):
+    """Show what companies wrote back — the Android app's inbox scan, pulled by sync.
+
+    Invitations first, then anything the classifier wasn't sure about, then the
+    settled outcomes. `inbox all` includes acknowledgements and unrelated mail.
+    """
+    from sync import replies_sorted
+
+    replies = replies_sorted()
+    if not replies:
+        print(
+            "\n   No replies recorded yet.\n"
+            "   The Android app scans Gmail hourly and syncs what it finds;"
+            " nothing shows up here until it has run."
+        )
+        return
+
+    show_all = args.strip().lower() in ("all", "-a", "--all")
+    invites = [r for r in replies if r.get("status") == "invited"]
+    todo = [r for r in replies if r.get("status") == "action_needed"]
+    pending = {"invited", "action_needed"}
+    unsure = [r for r in replies if r.get("status") not in pending and r.get("needs_review")]
+    closed = [r for r in replies if r.get("status") == "rejected"]
+    listed = invites + todo + unsure + closed
+    other = [r for r in replies if r not in listed]
+
+    def show(title, group):
+        if not group:
+            return
+        print(f"\n   ── {title} ({len(group)})")
+        for r in group:
+            label = r.get("company") or r.get("from", "")
+            if r.get("title"):
+                label = f"{label} — {r['title']}"
+            flags = []
+            if not r.get("key"):
+                flags.append("unmatched")
+            if r.get("classified_by") == "heuristic":
+                flags.append("unverified")
+            suffix = f"  [{', '.join(flags)}]" if flags else ""
+            print(f"      {r.get('ts', ''):<16} {label}{suffix}")
+            print(f"                       {r.get('subject', '')}")
+
+    show("Invitations", invites)
+    show("Waiting on you — the application isn't finished", todo)
+    show("Not sure — worth a look", unsure)
+    show("Rejected", closed)
+    if show_all:
+        show("Other", other)
+    elif other:
+        print(f"\n   ({len(other)} acknowledgement(s)/other — /inbox all to see them)")
+    print()
 
 
 def _cmd_salary(args, ctx):
@@ -479,6 +548,7 @@ def _cmd_set(args, ctx):
     company, title = extract_job_meta(role_desc, job)
     ctx.session = {"job": job, "role_desc": role_desc, "url": url, "label": f"{company} - {title}"}
     print(f"   Active job set: {ctx.session['label']}")
+    _print_contact(job)
     print("   Commands without a #/url now use this job.")
 
 
@@ -615,6 +685,32 @@ def _cmd_pdf(args, ctx):
         print(f"   Saved: {pdf}")
 
 
+def _print_contact(job) -> bool:
+    """Print the LinkedIn connection behind a network job, if there is one."""
+    contact = (job or {}).get("contact") if job else ""
+    if not contact:
+        return False
+    try:
+        extra = int(job.get("contacts_n") or 1)
+    except (TypeError, ValueError):
+        extra = 1
+    more = f" (+{extra - 1} more at {job.get('company', 'this company')})" if extra > 1 else ""
+    print(f"   🤝 via {contact}{more}")
+    if job.get("contact_url"):
+        print(f"      {job['contact_url']}")
+    return True
+
+
+def _cmd_contact(args, ctx):
+    """Show the connection you have at this job's company."""
+    r = _resolve_target(args, ctx)
+    if r is None:
+        return
+    job, _url, _role_desc, _extra = r
+    if not _print_contact(job):
+        print("   No connection recorded for this job (not from the network search).")
+
+
 def _cmd_status(args, ctx):
     try:
         n = len(load_jobs_from_csv())
@@ -629,6 +725,7 @@ def _cmd_status(args, ctx):
         words = len(s["role_desc"].split())
         print(f"   Active job: {s['label']}")
         print(f"   Source: {source} · description {words} word(s)")
+        _print_contact(s["job"])
     if ctx.last_gen:
         print(f"   Last generation: {ctx.last_gen['kind']} (use /retry or /redo)")
 
@@ -740,6 +837,14 @@ def _build_registry():
             True,
         ),
         Command(
+            "sober",
+            _cmd_sober,
+            "Regular cover letter, even for a pearl",
+            "sober [#|@name|url] [- extra]",
+            ("scl", "sober-cl"),
+            True,
+        ),
+        Command(
             "resume",
             _cmd_resume,
             "Tailor your resume to a role",
@@ -780,6 +885,13 @@ def _build_registry():
             True,
         ),
         Command("jobs", _cmd_jobs, "List saved jobs from jobs.csv", "jobs", ("list", "ls", "show")),
+        Command(
+            "inbox",
+            _cmd_inbox,
+            "Show replies to your applications (invites first)",
+            "inbox [all]",
+            ("replies",),
+        ),
         Command("liked", _cmd_liked, "List liked jobs not yet applied to; queue them", "liked"),
         Command("next", _cmd_next, "Step to the next liked job", "next", ("n",)),
         Command("set", _cmd_set, "Set the active session job", "set <#|@name|url>"),
@@ -795,6 +907,14 @@ def _build_registry():
             "Convert a docx to pdf (default: latest)",
             "pdf [docx_path]",
             ("to-pdf", "topdf"),
+        ),
+        Command(
+            "contact",
+            _cmd_contact,
+            "Show the connection you have at this company",
+            "contact [#|@name|url]",
+            ("who",),
+            True,
         ),
         Command("status", _cmd_status, "Show the active job + jobs.csv count", "status", ("st",)),
         Command("retry", _cmd_retry, "Re-run the last generation", "retry"),
@@ -961,6 +1081,35 @@ def _print_banner():
     print("  · A leading '/' is optional — `cl 5` and `/cl 5` are identical.\n")
 
 
+def _print_invites_notice():
+    """Announce what the phone's inbox scan left for you — interview invites, and
+    applications still waiting on a screening question (silent if none)."""
+    try:
+        from sync import replies_sorted
+
+        invites = replies_sorted("invited")
+        todo = replies_sorted("action_needed")
+    except Exception:
+        return
+    if not invites and not todo:
+        return
+
+    def listing(records):
+        for r in records[:3]:
+            label = r.get("company") or r.get("from", "")
+            if r.get("title"):
+                label = f"{label} — {r['title']}"
+            print(f"      {r.get('ts', ''):<16} {label}")
+
+    if invites:
+        print(f"   ✉ {len(invites)} interview invite(s) waiting — type /inbox for the list.")
+        listing(invites)
+    if todo:
+        print(f"   ⚑ {len(todo)} application(s) not finished — a question or file is missing.")
+        listing(todo)
+    print()
+
+
 def _run_interactive(liked_queue: list | None = None, initial_job: dict | None = None):
     """Run the interactive document-generation shell.
 
@@ -974,6 +1123,7 @@ def _run_interactive(liked_queue: list | None = None, initial_job: dict | None =
     _print_banner()
     if ctx.queue:
         print(f"   ♥ {len(ctx.queue)} liked job(s) queued from the TUI — type /next to start.\n")
+    _print_invites_notice()
     if initial_job is not None:
         ctx.from_tui = True
         _job, role_desc = _resolve_job_context({"job": initial_job})
@@ -1032,7 +1182,16 @@ Search:
                                 liked jobs in interactive mode
   --profile                     search all target roles from your profile
                                 (profile.json — run --setup to create one)
+  --non-climate                 with --profile (or a title): keep only strong
+                                role-fit jobs at NON-climate companies (fit ≥ 4,
+                                climate < 2) — the best general roles
                                 (Head of Product, CTO, founding engineer, EiR, ...)
+  --connections                 search the job boards of companies where you
+                                know someone (LinkedIn export; climate-relevant
+                                companies only) — results carry the contact
+  --import-connections PATH     import a LinkedIn Connections.csv export
+                                (LinkedIn → Settings → Data privacy → Get a
+                                copy of your data → Connections)
   -l / --location  LOCATION     filter by location
   -t / --job-type  TYPE         full-time | part-time | contract | remote
   -e / --experience LEVEL       entry | mid | senior
@@ -1048,11 +1207,13 @@ list; Tab completes commands & job numbers, ↑/Ctrl+R recall history (persisted
                      identified postings are saved to jobs.csv + synced)
   cl / resume / apply / salary [#|@name|url] [- extra]   generate documents
   drunk [#|@name|url]  cover letter as a drunk draft (what pearls get by default)
+  sober [#|@name|url]  regular cover letter, even for a pearl
   applied [#|@name|url]  mark a job as applied (stored + synced); queue → next, else exit
   answer [#]: <q>    answer an application question      aq: <q>   (no job context)
   retry / redo <x>   re-run the last generation (redo appends extra guidance)
   pdf [docx_path]    redo the docx → pdf conversion (default: latest docx)
   open [docx_path]   open the last generated docx        url [#]  open the job URL
+  contact [#]        show the connection you have at that company
   status             show session
   jobs               numbered job list                   !<cmd>   run a shell command
 
@@ -1077,6 +1238,7 @@ Notes:
 
 Examples:
   jobfinder --profile -l Switzerland    # search all your target roles
+  jobfinder --profile --non-climate     # best general (non-climate) roles
   jobfinder "Software Engineer"
   jobfinder "Data Scientist" -l Switzerland
   jobfinder "PM,Engineer" -l Germany -i
@@ -1101,8 +1263,17 @@ def main():
     parser.add_argument("-e", "--experience", default="", choices=["", "entry", "mid", "senior"])
     parser.add_argument("-i", "--interactive", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument(
+        "--non-climate",
+        action="store_true",
+        help="search the profile sources but invert the climate gate: keep only"
+        " strong role-fit jobs (fit ≥ 4) at non-climate companies",
+    )
     parser.add_argument("--tui", action="store_true")
     parser.add_argument("--setup", action="store_true")
+    parser.add_argument("--login-wttj", action="store_true")
+    parser.add_argument("--connections", action="store_true")
+    parser.add_argument("--import-connections", metavar="PATH", default=None)
     parser.add_argument(
         "-c", "--cover-letter", "--cl", metavar="JOB|URL", default=None, dest="cover_letter"
     )
@@ -1117,6 +1288,12 @@ def main():
 
     if args.help:
         print(_HELP)
+        return
+
+    if args.login_wttj:
+        from wttj import login
+
+        login()
         return
 
     # --- First-time setup wizard ---
@@ -1245,13 +1422,43 @@ def main():
             generate_cover_letter(job, extra_context=args.extra, url=cmd.get("url") or "")
         return
 
-    # --- Profile search: deterministic pipeline over all target roles ---
-    if args.profile or args.job_titles.strip().lower() == "profile":
+    # --- LinkedIn network: import the export, or search the companies in it ---
+    if args.import_connections:
+        from connections import import_connections
+
         print("=" * 70)
-        print("🌱 Climate & Green Tech Job Finder — target-role profile search")
+        print("🤝 Importing LinkedIn connections")
+        print("=" * 70)
+        try:
+            import_connections(args.import_connections)
+        except (OSError, ValueError) as e:
+            print(f"\n❌ {e}")
+            sys.exit(1)
+        print("\nNow run:  jobfinder --connections -l 'my locations'")
+        return
+
+    if args.connections:
+        from agent import run_connection_search
+
+        print("=" * 70)
+        print("🤝 Climate & Green Tech Job Finder — LinkedIn network search")
         print("=" * 70)
         query = "" if args.job_titles.strip().lower() in ("", "profile") else args.job_titles
-        run_profile_search(location=args.location, query=query)
+        run_connection_search(location=args.location, query=query)
+        if args.interactive:
+            _run_interactive()
+        return
+
+    # --- Profile search: deterministic pipeline over all target roles ---
+    if args.profile or args.non_climate or args.job_titles.strip().lower() == "profile":
+        print("=" * 70)
+        mode = (
+            "best general roles (non-climate)" if args.non_climate else "target-role profile search"
+        )
+        print(f"🌱 Climate & Green Tech Job Finder — {mode}")
+        print("=" * 70)
+        query = "" if args.job_titles.strip().lower() in ("", "profile") else args.job_titles
+        run_profile_search(location=args.location, query=query, non_climate=args.non_climate)
         if args.interactive:
             _run_interactive()
         return

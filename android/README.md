@@ -5,7 +5,7 @@ as a phone app, plus a share target for job URLs.
 
 ## What it does
 
-- **Profile search** — queries the same nine sources as the Python app
+- **Profile search** — queries the same ten sources as the Python app
   (Arbeitnow, RemoteOK, Adzuna, Greenhouse, Lever, ClimateTechList, Climatebase,
   Jobs in Carbon, Remote Impact), filters titles against the target-role
   profile, checks liveness, fetches full descriptions (once — failures retry
@@ -36,6 +36,21 @@ as a phone app, plus a share target for job URLs.
   pushes on swipe/undo/search/share. Fill `FIREBASE_EMAIL`/`FIREBASE_PASSWORD`
   in `Keys.kt` with the same values as the repo's `.env`; blank = sync off.
   The Firestore SDK's offline cache means swipes made offline sync later.
+- **Inbox replies** (`data/Mail.kt`, `work/InboxWorker.kt`) — scans Gmail over
+  IMAP hourly in the background (and on launch), works out which mail is a reply
+  to a job marked applied, and notifies on the two that need you: an interview
+  invite (channel `interviews`) and an application still waiting on a screening
+  question, assessment or document (channel `applications` — "Complete two
+  questions to apply as …"). Rejections and acknowledgements update quietly; all
+  of it is read on the **Replies** screen. Access is an app password rather than the Gmail API, so it needs no
+  Google Play Services and works on GrapheneOS — set `GMAIL_ADDRESS` /
+  `GMAIL_APP_PASSWORD` in `Keys.kt` (2-step verification →
+  https://myaccount.google.com/apppasswords); blank = no scanning. Classification
+  is two Haiku passes (triage all new sender+subject in one call, then bodies for
+  the candidates), tuned for recall: if the API key is spent it falls back to
+  keyword heuristics, flags those verdicts "unverified", keeps the UID cursor
+  where it was so they get re-judged later, and still notifies. Verdicts sync to
+  Firestore (`replies`), where the laptop's TUI/shell read them.
 - **Description fetching** — done during search and cached (`job_descriptions.json`
   in app storage). Resolution order: local cache → sync DB (another device may
   have it) → direct fetch → `r.jina.ai` rendering proxy for bot-walled/JS-only
@@ -44,10 +59,11 @@ as a phone app, plus a share target for job URLs.
 ## Building
 
 Same toolchain as Eigenflow (Gradle 8.13, AGP 8.12, Kotlin 2.0, compileSdk 34).
-System Java is too new for Gradle; use the Android Studio flatpak JBR:
+System Java is too new for Gradle (and so is the Android Studio flatpak JBR since
+its update to Java 25); use the local Temurin 21:
 
 ```bash
-export JAVA_HOME=/var/lib/flatpak/app/com.google.AndroidStudio/current/active/files/extra/jbr
+export JAVA_HOME=/home/milo/.local/share/jdks/jdk-21
 ./gradlew :app:assembleDebug
 ```
 
@@ -67,6 +83,16 @@ $ADB -s "$($ADB devices | awk '$2=="device" && $1 !~ /^emulator-/ {print $1; exi
 If nothing prints from the `awk` part, the phone isn't visible to adb yet — check
 Settings > System > Developer options > USB debugging is on (and USB mode is
 "File Transfer"/"PTP", not "Charging only"), or re-pair wireless debugging.
+
+Build and install in one go:
+
+```bash
+export JAVA_HOME=/home/milo/.local/share/jdks/jdk-21
+cd android && ./gradlew :app:assembleDebug && \
+ADB=~/Android/Sdk/platform-tools/adb && \
+$ADB -s "$($ADB devices | awk '$2=="device" && $1 !~ /^emulator-/ {print $1; exit}')" \
+    install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
 ## Personal files (gitignored, required to build)
 

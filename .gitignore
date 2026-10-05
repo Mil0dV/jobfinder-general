@@ -28,6 +28,9 @@ Resume_*.docx
 Resume_base.docx
 Resume_base.txt
 profile.json
+connections.csv
+connections_companies.json
+connections_boards.json
 *_jobs.csv
 jobs.csv
 jobs*.csv
@@ -64,7 +67,10 @@ Thumbs.db
 
 # TUI state (job decisions + location history)
 job_decisions.json
+# Replies to applications, pulled from the phone's Gmail scan (personal mail data)
+job_replies.json
 .jobfinder_tui.json
+.climatejobs_crawl.json
 
 # Android app (android/) — build artifacts and personal/secret files
 android/.gradle/
@@ -77,3 +83,7 @@ android/.kotlin/
 android/app/src/main/java/dev/milo/jobfinder/data/Keys.kt
 android/app/src/main/assets/styleguide.md
 android/app/google-services.json
+location_debug.csv
+
+.jobfinder_wttj_profile/
+.jobfinder_wttj_capture*.jsonl

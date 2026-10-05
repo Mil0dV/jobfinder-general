@@ -30,16 +30,28 @@ class SearchEngine(private val descFetcher: DescFetcher) {
         const val VERIFY_AGE_DAYS = 30L
         const val MIN_FIT = 3
         const val MIN_CLIMATE = 2
+        // "Best general roles (non-climate)": postings that fail the climate gate
+        // still make the deck when the ROLE fit is strong. Mirrors NONCLIMATE_MIN_FIT.
+        const val NONCLIMATE_MIN_FIT = 4
         const val MAX_RESULTS = 50
 
         // Sources that only list climate jobs — climate relevance is inherent.
         val CLIMATE_BOARD_SOURCES = setOf(
             "climatebase", "climatetechlist", "greenhouse", "lever",
-            "jobsincarbon", "remoteimpact",
+            "jobsincarbon", "remoteimpact", "cdrjobs",
         )
     }
 
-    suspend fun search(query: String, onProgress: (Progress) -> Unit): List<Job> =
+    /**
+     * Run the pipeline. [nonClimate] inverts the climate gate: keep only jobs
+     * scoring below MIN_CLIMATE but fitting the role at least NONCLIMATE_MIN_FIT
+     * — the best general (non-climate) roles for the same profile.
+     */
+    suspend fun search(
+        query: String,
+        nonClimate: Boolean = false,
+        onProgress: (Progress) -> Unit,
+    ): List<Job> =
         withContext(Dispatchers.IO) {
             // 1. All sources in parallel.
             val allJobs = mutableListOf<Job>()
@@ -89,7 +101,7 @@ class SearchEngine(private val descFetcher: DescFetcher) {
             fetchDescriptions(alive, onProgress)
 
             // 5. Claude validation in parallel batches.
-            val validated = validate(alive, query, onProgress)
+            val validated = validate(alive, query, nonClimate, onProgress)
 
             // Pearls (supermatches) first, then most recent, fit/climate as tiebreak.
             val ranked = validated.sortedWith(
@@ -212,6 +224,7 @@ class SearchEngine(private val descFetcher: DescFetcher) {
     private suspend fun validate(
         jobs: List<Job>,
         query: String,
+        nonClimate: Boolean,
         onProgress: (Progress) -> Unit,
     ): List<Job> {
         if (jobs.isEmpty()) return emptyList()
@@ -225,7 +238,10 @@ class SearchEngine(private val descFetcher: DescFetcher) {
                     sem.withPermit {
                         scoreBatch(batch, query)
                         synchronized(kept) {
-                            kept.addAll(batch.filter { it.fitScore >= MIN_FIT && it.climateScore >= MIN_CLIMATE })
+                            kept.addAll(batch.filter {
+                                if (nonClimate) it.fitScore >= NONCLIMATE_MIN_FIT && it.climateScore < MIN_CLIMATE
+                                else it.fitScore >= MIN_FIT && it.climateScore >= MIN_CLIMATE
+                            })
                             done++
                             onProgress(Progress("validate", done, batches.size, "${kept.size} kept"))
                         }

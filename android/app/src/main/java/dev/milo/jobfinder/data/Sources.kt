@@ -7,7 +7,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /**
- * The nine job sources, ported from agent.py. Each returns title-filtered,
+ * The ten job sources, ported from agent.py. Each returns title-filtered,
  * location-filtered jobs; failures return an empty list (the search goes on).
  */
 object Sources {
@@ -22,6 +22,7 @@ object Sources {
         "climatebase" to ::climatebase,
         "jobsincarbon" to ::jobsincarbon,
         "remoteimpact" to ::remoteimpact,
+        "cdrjobs" to ::cdrjobs,
     )
 
     private fun stripHtml(s: String): String = s.replace(Regex("<[^>]+>"), " ")
@@ -293,6 +294,20 @@ object Sources {
     private const val CB_APP = "8PSNFFQTXQ"
     private const val CB_KEY = "d2ebe27d3cc3d35fea04da7b1b0718a8"
 
+    private val APPLY_SUFFIX_RE = Regex("/(?:apply|application|applicants/new)/?$", RegexOption.IGNORE_CASE)
+
+    // Climatebase's `how_to_apply` is whatever the company's own ATS "Apply" button
+    // links to, which is often the application FORM, not the posting (Lever .../apply,
+    // Ashby .../application, Greenhouse job boards .../applicants/new) -- ported from
+    // agent.py's _strip_apply_suffix.
+    private fun stripApplySuffix(url: String): String {
+        val cut = url.indexOfAny(charArrayOf('?', '#'))
+        val base = if (cut >= 0) url.substring(0, cut) else url
+        val rest = if (cut >= 0) url.substring(cut) else ""
+        val stripped = APPLY_SUFFIX_RE.replace(base, "")
+        return if (stripped == base) url else stripped + rest
+    }
+
     fun climatebase(query: String): List<Job> {
         val endpoint = "https://$CB_APP-dsn.algolia.net/1/indexes/Job_production/query"
         val headers = mapOf(
@@ -330,6 +345,7 @@ object Sources {
                 seen.add(jobId)
                 var url = hit.optString("how_to_apply")
                 if (!url.startsWith("http")) url = "https://climatebase.org/job/$jobId"
+                url = stripApplySuffix(url)
                 val remotePrefs = hit.optJSONArray("remote_preferences") ?: JSONArray()
                 val remoteList = (0 until remotePrefs.length()).map { remotePrefs.getString(it) }
                 val locations = hit.optJSONArray("locations") ?: JSONArray()
@@ -427,6 +443,100 @@ object Sources {
                 )
                 if (Profile.titleMatches(job.title, query)) jobs.add(job)
             }
+        }
+        return jobs
+    }
+
+    // --- CDRjobs (carbon dioxide removal board; GraphQL behind a Wix pym iframe) -------------
+    // Public, auth-free Apollo API; the clientKey is the embed UUID. `limit` caps at 100 and
+    // introspection is off, so the ~600-job catalog is walked with the keyset cursor
+    // (takeAfter = last publishedAt, takeAfterId = last id). Mirrors search_cdrjobs in agent.py.
+
+    private const val CDR_GRAPHQL = "https://prod-backend.cdrjobs.earth/graphql"
+    private const val CDR_CLIENT_KEY = "f2c03c34-d670-448c-b5ca-77b6b69b6f26"
+    private const val CDR_MAX_PAGES = 15
+    private const val CDR_QUERY =
+        "query searchJobs(\$clientKey: String!, \$filters: jobFiltersInput!, " +
+            "\$pagination: paginationInput!) { searchJobs(clientKey: \$clientKey, " +
+            "filters: \$filters, pagination: \$pagination) { data { id title sourceUrl " +
+            "locations { country city } remote currency minSalary maxSalary publishedAt " +
+            "company { name } } } }"
+    private val CDR_COUNTRIES = mapOf(
+        "ch" to "Switzerland", "de" to "Germany", "nl" to "Netherlands", "at" to "Austria",
+        "fr" to "France", "gb" to "United Kingdom", "ie" to "Ireland", "es" to "Spain",
+        "it" to "Italy", "be" to "Belgium", "dk" to "Denmark", "se" to "Sweden",
+        "no" to "Norway", "fi" to "Finland", "pt" to "Portugal", "pl" to "Poland",
+        "us" to "United States", "ca" to "Canada", "au" to "Australia", "in" to "India",
+        "is" to "Iceland", "ae" to "United Arab Emirates",
+    )
+
+    fun cdrjobs(query: String): List<Job> {
+        val headers = mapOf("Origin" to "https://embed.cdrjobs.earth")
+        val jobs = mutableListOf<Job>()
+        var pagination = JSONObject().put("limit", 100)
+        for (page in 1..CDR_MAX_PAGES) {
+            val reqBody = JSONObject()
+                .put("query", CDR_QUERY)
+                .put(
+                    "variables",
+                    JSONObject()
+                        .put("clientKey", CDR_CLIENT_KEY)
+                        .put("filters", JSONObject())
+                        .put("pagination", pagination),
+                )
+                .toString()
+            val body = Http.postJson(CDR_GRAPHQL, reqBody, headers) ?: break
+            val data = try {
+                JSONObject(body).optJSONObject("data")?.optJSONObject("searchJobs")
+                    ?.optJSONArray("data") ?: break
+            } catch (e: Exception) {
+                break
+            }
+            for (i in 0 until data.length()) {
+                val j = data.getJSONObject(i)
+                val title = j.optString("title").trim()
+                if (title.isEmpty() || !Profile.titleMatches(title, query)) continue
+                val locs = j.optJSONArray("locations") ?: JSONArray()
+                val places = (0 until locs.length()).map { k ->
+                    val l = locs.getJSONObject(k)
+                    val code = l.optString("country").lowercase()
+                    listOf(
+                        l.optString("city").takeIf { it.isNotBlank() && it != "null" },
+                        CDR_COUNTRIES[code] ?: code.uppercase(),
+                    ).filterNotNull().filter { it.isNotBlank() }.joinToString(", ")
+                }
+                val remote = j.optString("remote") // "yes" | "hybrid" | "no"
+                var location = places.joinToString("; ")
+                if (remote == "yes") {
+                    location = if (location.isEmpty()) "Remote" else "Remote — $location"
+                }
+                val lo = j.optDouble("minSalary", 0.0).toLong()
+                val hi = j.optDouble("maxSalary", 0.0).toLong()
+                val currency = j.optString("currency").takeIf { it != "null" }.orEmpty()
+                val salary = when {
+                    lo > 0 && hi > 0 -> "%,d–%,d $currency".format(lo, hi).trim()
+                    lo > 0 || hi > 0 -> "%,d $currency".format(maxOf(lo, hi)).trim()
+                    else -> ""
+                }
+                val job = Job.make(
+                    title = title,
+                    company = j.optJSONObject("company")?.optString("name").orEmpty(),
+                    url = j.optString("sourceUrl"),
+                    location = location.ifEmpty { "See posting" },
+                    salary = salary,
+                    postedDate = j.optString("publishedAt").take(10),
+                    wfhPolicy = when (remote) {
+                        "yes" -> "Remote"; "hybrid" -> "Hybrid"; "no" -> "On-site"; else -> "Unknown"
+                    },
+                    source = "cdrjobs",
+                )
+                if (Profile.matchesLocations(job)) jobs.add(job)
+            }
+            if (data.length() < 100) break
+            val last = data.getJSONObject(data.length() - 1)
+            pagination = JSONObject().put("limit", 100)
+                .put("takeAfter", last.optString("publishedAt"))
+                .put("takeAfterId", last.optString("id"))
         }
         return jobs
     }

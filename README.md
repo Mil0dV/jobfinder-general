@@ -32,6 +32,19 @@ ADZUNA_API_KEY=...
 > and `firestore.rules` are the author's personal setup. Sync is a silent no-op unless
 > you configure `FIREBASE_*` variables in `.env` pointing at your own Firebase project.
 
+### Interview invites
+
+Jobs you mark with `/applied` can be tracked all the way to the reply. The Android
+app scans Gmail over IMAP in the background, classifies what each company wrote
+back, and notifies you about the two kinds that need you: an invitation to talk,
+and an application that is still parked because a screening question, assessment
+or document is outstanding. It errs towards flagging too much, since a missed
+invitation is the whole point. Verdicts sync to Firestore, so
+on the laptop the TUI menu shows `Replies (✉ N)` and the shell announces both at
+startup and lists them with `/inbox`. Setup lives entirely on the phone
+(`GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` in `android/.../Keys.kt`); no mail
+credentials are needed here. See `android/README.md`.
+
 ---
 
 ## Job Search
@@ -57,6 +70,43 @@ uv run python cli.py "Software Engineer" -l "Switzerland" --interactive
 ```
 
 Results are saved to `jobs.csv`. Each run appends new jobs (deduped by URL).
+
+### Welcome to the Jungle (optional)
+
+WTTJ has no public API, so it needs your own login. It's off until you set it up:
+
+```bash
+uv sync --extra wttj && uv run playwright install chromium   # ~120 MB, only for this source
+uv run python cli.py --login-wttj                             # sign in once (Google SSO works)
+```
+
+A browser window opens; sign in, browse the jobs page, then close it. The session is stored in
+`.jobfinder_wttj_profile/` (gitignored) and later searches pull your WTTJ recommendations
+automatically (read-only; nothing is swiped on your account). Re-run `--login-wttj` when the
+session expires. Automated access may be restricted by WTTJ's terms, so use your own account at
+your own discretion.
+
+### Your LinkedIn network
+
+Search the job boards of companies where you already know someone. Export your
+connections from LinkedIn (**Settings → Data privacy → Get a copy of your data →
+Connections**), then:
+
+```bash
+# One-off: import the export and score each company for climate relevance
+uv run python cli.py --import-connections ~/Downloads/Connections.csv
+
+# Search the climate-relevant ones (also in the TUI menu: "Search my LinkedIn network")
+uv run python cli.py --connections -l "my locations"
+```
+
+Matching jobs are ranked like any other, plus a `contact` column naming the person
+you know there — `/contact` in interactive mode shows them, and you decide whether
+to mention them: `/cl 5 - mention Jane, who runs ops there`.
+
+The first run is the slow one: each company's board is found by probing the common
+ATS APIs, then web search, then scraping the careers page. Results are cached
+(`connections_boards.json`), so later runs only re-check what expired.
 
 **Data sources searched in parallel (no key needed unless noted):**
 - **Climatebase** — ~14k climate jobs, queried via its public Algolia search index
@@ -183,6 +233,7 @@ I've spent the last few years building tools that cut carbon at scale...
 ├── cli.py              # Entry point: argparse CLI + interactive loop
 ├── setup_wizard.py     # First-run setup: resume import + profile generation
 ├── agent.py            # Claude agent loop + all job search tools
+├── connections.py      # LinkedIn network search: export → companies → their job boards
 ├── candidate_profile.py # Loads profile.json (falls back to built-in defaults)
 ├── cover_letter.py     # Cover letter & question generation (Anthropic/Claude)
 ├── resume_tailor.py    # Resume tailoring (Anthropic/Claude) → styled docx/PDF
@@ -222,6 +273,8 @@ Options:
   -t, --job-type       full-time | part-time | contract | remote
   -e, --experience     entry | mid | senior
   --setup              First-time setup wizard (resume import + profile generation)
+  --connections        Search companies where you know someone (LinkedIn export)
+  --import-connections PATH   Import a LinkedIn Connections.csv export
   --interactive        Drop into interactive mode after search
   --cover-letter N     Generate cover letter for job #N and exit
   --cl N               Alias for --cover-letter
