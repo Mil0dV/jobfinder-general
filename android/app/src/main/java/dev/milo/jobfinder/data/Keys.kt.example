@@ -13,4 +13,11 @@ object Keys {
     // `npx -y firebase-tools@latest apps:sdkconfig ANDROID <APP_ID>`).
     const val FIREBASE_EMAIL = ""
     const val FIREBASE_PASSWORD = ""
+
+    // Gmail IMAP, for scanning replies to jobs you applied to (optional; blank =
+    // no inbox scanning, no notifications). Not your account password — turn on
+    // 2-step verification, then create an app password at
+    // https://myaccount.google.com/apppasswords and paste it here (spaces are fine).
+    const val GMAIL_ADDRESS = ""
+    const val GMAIL_APP_PASSWORD = ""
 }

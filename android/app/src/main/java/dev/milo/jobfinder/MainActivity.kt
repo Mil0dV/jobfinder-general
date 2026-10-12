@@ -1,16 +1,21 @@
 package dev.milo.jobfinder
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -19,6 +24,7 @@ import androidx.compose.ui.Modifier
 import dev.milo.jobfinder.ui.ApplyScreen
 import dev.milo.jobfinder.ui.DeckScreen
 import dev.milo.jobfinder.ui.MenuScreen
+import dev.milo.jobfinder.ui.RepliesScreen
 import dev.milo.jobfinder.ui.RoleInputScreen
 import dev.milo.jobfinder.ui.SearchScreen
 import dev.milo.jobfinder.ui.SplashScreen
@@ -29,9 +35,14 @@ class MainActivity : ComponentActivity() {
 
     private val vm: AppViewModel by viewModels()
 
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* either way */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        askForNotifications()
         handleShareIntent(intent)
+        handleReplyIntent(intent)
         setContent {
             Surface(
                 modifier = Modifier
@@ -61,6 +72,7 @@ class MainActivity : ComponentActivity() {
                         onCopy = ::copyToClipboard,
                         onShare = ::shareText,
                     )
+                    Screen.Replies -> RepliesScreen(vm, onOpenUrl = ::openUrl)
                 }
             }
         }
@@ -69,6 +81,29 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShareIntent(intent)
+        handleReplyIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The hourly worker scans while the app is backgrounded; the in-memory
+        // reply list is a snapshot, so re-read it whenever we come forward.
+        vm.refreshReplies()
+    }
+
+    /** Tapping an interview-invite notification lands on the replies list. */
+    private fun handleReplyIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(Notifications.EXTRA_OPEN_REPLIES, false) == true) {
+            vm.openReplies()
+        }
+    }
+
+    private fun askForNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return
+        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     private fun handleShareIntent(intent: Intent?) {

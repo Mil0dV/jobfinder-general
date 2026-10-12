@@ -1,6 +1,7 @@
 package dev.milo.jobfinder
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -10,11 +11,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.milo.jobfinder.data.DescFetcher
 import dev.milo.jobfinder.data.Generator
+import dev.milo.jobfinder.data.InboxScanner
 import dev.milo.jobfinder.data.Job
+import dev.milo.jobfinder.data.Mail
 import dev.milo.jobfinder.data.Profile
+import dev.milo.jobfinder.data.Reply
+import dev.milo.jobfinder.data.ScanState
 import dev.milo.jobfinder.data.SearchEngine
 import dev.milo.jobfinder.data.Store
 import dev.milo.jobfinder.data.Sync
+import dev.milo.jobfinder.work.InboxWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job as CoroutineJob
 import kotlinx.coroutines.delay
@@ -30,6 +36,7 @@ sealed class Screen {
     data object Deck : Screen()
     data object Summary : Screen()
     data object Apply : Screen()
+    data object Replies : Screen()
 }
 
 /** What the apply screen is generating right now. */
@@ -38,7 +45,8 @@ enum class GenKind { NONE, COVER_LETTER, ANSWER, SALARY }
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val filesDir: File = app.filesDir
-    val store = Store(filesDir)
+    private val appContext: Context = app.applicationContext
+    val store = Store.of(filesDir)
     private val descFetcher = DescFetcher(File(filesDir, "job_descriptions.json"))
     private val engine = SearchEngine(descFetcher)
     private val generator = Generator(app, descFetcher)
@@ -54,7 +62,75 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 "sync failed: ${e.message}"
             }
-            withContext(Dispatchers.Main) { syncStatus = summary }
+            withContext(Dispatchers.Main) {
+                syncStatus = summary
+                refreshReplies()
+            }
+            // Scan after the sync, so the applied-jobs list a reply is matched
+            // against includes anything marked applied on the laptop.
+            InboxWorker.schedule(app)
+            if (Mail.configured) {
+                // Give the first swipes of the session a head start on the network/
+                // Firestore connection before the scan's IMAP+LLM traffic competes
+                // with them — without this, a swipe's Sync.pushDecision() is still
+                // fired immediately, but can sit behind a fresh scan's fetch/classify
+                // calls on a slow connection, which reads as "sync waits for the deck."
+                delay(15_000)
+                runScan()
+            }
+        }
+    }
+
+    // --- inbox replies ------------------------------------------------------------
+
+    private val scanState = ScanState.of(filesDir)
+    private val scanner = InboxScanner(store, scanState)
+
+    var replies by mutableStateOf<List<Reply>>(emptyList())
+        private set
+
+    /** One-liner for the menu/replies header: invite count, or why it's degraded. */
+    var inboxStatus by mutableStateOf<String?>(null)
+        private set
+
+    var scanning by mutableStateOf(false)
+        private set
+
+    val inviteCount: Int get() = replies.count { it.isInvite }
+
+    /** Applications that can't proceed until Milo answers something. */
+    val actionCount: Int get() = replies.count { it.needsAction }
+
+    /** What the menu badges: invites plus unfinished applications. */
+    val waitingCount: Int get() = inviteCount + actionCount
+
+    fun refreshReplies() {
+        replies = store.replies.all()
+        inboxStatus = scanner.statusLine()
+    }
+
+    /** Manual "scan now" from the replies screen. */
+    fun scanInboxNow() {
+        if (scanning) return
+        scanning = true
+        viewModelScope.launch(Dispatchers.IO) { runScan() }
+    }
+
+    private suspend fun runScan() {
+        withContext(Dispatchers.Main) { scanning = true }
+        val result = try {
+            scanner.scan()
+        } catch (e: Exception) {
+            InboxScanner.Result(error = e.message?.take(120) ?: "inbox scan failed")
+        }
+        if (result.toNotify.isNotEmpty()) {
+            val sent = Notifications.notify(appContext, result.toNotify)
+            store.replies.markNotified(sent)
+        }
+        withContext(Dispatchers.Main) {
+            scanning = false
+            refreshReplies()
+            if (result.error != null) inboxStatus = "inbox: ${result.error}"
         }
     }
 
@@ -87,9 +163,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         backStack.add(Screen.Menu)
     }
 
+    /** Jump straight to the replies list (tapping an invite notification). */
+    fun openReplies() {
+        backStack.clear()
+        backStack.add(Screen.Menu)
+        backStack.add(Screen.Replies)
+        refreshReplies()
+    }
+
     // --- search ----------------------------------------------------------------
 
     var searchQuery by mutableStateOf(Profile.PROFILE_QUERY)
+        private set
+    var searchNonClimate by mutableStateOf(false)
         private set
     var searchPhase by mutableStateOf("starting")
     var searchDone by mutableStateOf(0)
@@ -99,8 +185,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var searchError by mutableStateOf<String?>(null)
     private var searchJob: CoroutineJob? = null
 
-    fun startSearch(query: String) {
+    fun startSearch(query: String, nonClimate: Boolean = false) {
         searchQuery = query
+        searchNonClimate = nonClimate
         searchPhase = "starting"
         searchDone = 0
         searchTotal = 1
@@ -110,7 +197,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         navigate(Screen.Searching)
         searchJob = viewModelScope.launch {
             try {
-                val jobs = engine.search(query) { p ->
+                val jobs = engine.search(query, nonClimate) { p ->
                     viewModelScope.launch(Dispatchers.Main) {
                         searchPhase = p.phase
                         searchDone = p.done

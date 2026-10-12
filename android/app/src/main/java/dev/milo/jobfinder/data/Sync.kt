@@ -14,8 +14,9 @@ import java.security.MessageDigest
  *   jobs/<key>          job records            (content-addressed, merged)
  *   decisions/<key>     swipe decisions        (last ts wins)
  *   descriptions/<key>  fetched posting text   (pushed on fetch, pulled on miss)
+ *   replies/<sha1 msgid> classified inbox replies (this app writes, Python reads)
  *
- * <key> = sha1(normalized url | "company|title"); records carry the original
+ * <key> = sha1(decisionKey) = sha1("company|title", URL fallback); records carry the original
  * key. Auth is the baked-in email/password user (Keys.kt); the project config
  * comes from google-services.json. Disabled (all no-ops) when the email is
  * blank. All methods are blocking — call from Dispatchers.IO.
@@ -87,12 +88,14 @@ object Sync {
         jobs.chunked(BATCH / 2).forEach { chunk ->
             val batch = db.batch()
             for (job in chunk) {
-                val k = jobKey(job)
-                batch.set(db.collection("jobs").document(k), jobRecord(job))
+                batch.set(db.collection("jobs").document(jobKey(job)), jobRecord(job))
                 val desc = job.desc
-                if (!desc.isNullOrBlank()) {
+                // Descriptions are keyed by URL (page content is per-URL), not by
+                // the job identity — matches getDescription / pushDescription and
+                // the Python side (sync.py norm_key(url)).
+                if (!desc.isNullOrBlank() && job.url.isNotBlank()) {
                     batch.set(
-                        db.collection("descriptions").document(k),
+                        db.collection("descriptions").document(sha1(Job.normalizeUrl(job.url))),
                         mapOf("url" to job.url, "description" to desc),
                     )
                 }
@@ -155,6 +158,46 @@ object Sync {
                 val record = mapToJson(data)
                 record.remove("key")
                 out[localKey] = record
+            }
+            out
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
+     * Upsert classified inbox replies. Document id is sha1(rfc822 message id), so
+     * re-classifying a message (once API credits are back, say) overwrites its
+     * record instead of adding a second one. This app is the only writer; the
+     * desktop tool reads the collection to show its interview banner.
+     */
+    fun pushReplies(replies: JSONObject) {
+        if (replies.length() == 0) return
+        val db = db() ?: return
+        replies.keys().asSequence().toList().chunked(BATCH).forEach { chunk ->
+            val batch = db.batch()
+            for (id in chunk) {
+                val record = replies.optJSONObject(id) ?: continue
+                val data = mutableMapOf<String, Any>("id" to id)
+                for (k in record.keys()) data[k] = record.get(k)
+                batch.set(db.collection("replies").document(id), data)
+            }
+            try {
+                Tasks.await(batch.commit())
+            } catch (e: Exception) { /* best-effort */ }
+        }
+    }
+
+    /** Remote replies as id → record. */
+    fun pullReplies(): Map<String, JSONObject> {
+        val db = db() ?: return emptyMap()
+        return try {
+            val out = mutableMapOf<String, JSONObject>()
+            for (doc in Tasks.await(db.collection("replies").get()).documents) {
+                val data = doc.data ?: continue
+                val record = mapToJson(data)
+                record.remove("id")
+                out[doc.id] = record
             }
             out
         } catch (e: Exception) {

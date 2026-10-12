@@ -205,6 +205,10 @@ private fun CardContent(job: Job, vm: AppViewModel) {
         if (job.isPearl) {
             TermText("🦪 PEARL — supermatch", color = Term.magenta, bold = true, fontSize = 13.sp)
         }
+        // From the best-general-roles deck (or a saved one): flagged everywhere.
+        if (job.climateScore in 0..1) {
+            TermText("💼 general role — no climate angle", color = Term.yellow, bold = true, fontSize = 13.sp)
+        }
         TermText(job.title, bold = true, fontSize = 16.sp)
         TermText(job.company, color = Term.cyan, fontSize = 14.sp)
         CardRule()

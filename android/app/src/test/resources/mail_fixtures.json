@@ -1,0 +1,344 @@
+{
+  "_comment": [
+    "Labelled inbox samples for ReplyClassifierTest. 'expect' is the status the",
+    "classifier must produce: invited | rejected | acknowledged | other | noise.",
+    "'noise' means triage should not even treat it as a candidate.",
+    "Recall on 'invited' is asserted at 1.00 — a missed invite fails the build.",
+    "",
+    "Drawn from a real inbox, July 2026. ANONYMISED: company names, people and",
+    "email addresses are replaced with invented ones. The wording of each message",
+    "is verbatim, because the wording is the thing under test — as are the sender",
+    "shapes (ATS domains, noreply local-parts, personal addresses).",
+    "",
+    "Private correspondence unrelated to job applications (legal, medical,",
+    "personal disputes) was deliberately left out rather than anonymised."
+  ],
+  "applied": [
+    {
+      "key": "aurex energy|lead product manager",
+      "company": "Aurex Energy",
+      "title": "Lead Product Manager"
+    },
+    {
+      "key": "kestrel|head of product & technology",
+      "company": "Kestrel AG",
+      "title": "Head of Product & Technology"
+    },
+    {
+      "key": "railnet|technical product owner",
+      "company": "Railnet",
+      "title": "Technical Product Owner / Project Manager"
+    },
+    {
+      "key": "cindral|technical product lead",
+      "company": "Cindral",
+      "title": "Technical Product Lead"
+    },
+    {
+      "key": "fennick|senior technical product manager",
+      "company": "Fennick",
+      "title": "Senior Technical Product Manager"
+    },
+    {
+      "key": "quillon|lead ai product manager",
+      "company": "Quillon",
+      "title": "Lead AI Product Manager"
+    },
+    {
+      "key": "marlow|senior product manager",
+      "company": "Marlow DATA GmbH",
+      "title": "Senior Product Manager"
+    },
+    {
+      "key": "tervant|product manager desktop & web",
+      "company": "Tervant",
+      "title": "Product Manager - Desktop & Web"
+    },
+    {
+      "key": "lumera|data operations lead",
+      "company": "Lumera",
+      "title": "Data Operations Lead"
+    },
+    {
+      "key": "orvane|staff product manager",
+      "company": "Orvane",
+      "title": "Staff Product Manager"
+    },
+    {
+      "key": "brightmill|product manager",
+      "company": "Brightmill",
+      "title": "Product Manager"
+    },
+    {
+      "key": "halden|ai strategy engineer",
+      "company": "Norvik GmbH",
+      "title": "AI Strategy Engineer"
+    },
+    {
+      "key": "calder|lead business innovation",
+      "company": "Calder Group",
+      "title": "Lead Business Innovation"
+    },
+    {
+      "key": "pellam|team lead software engineering",
+      "company": "Pellam",
+      "title": "Team Lead Software Engineering"
+    },
+    {
+      "key": "dunmore|founding engineer",
+      "company": "Dunmore",
+      "title": "Founding Engineer"
+    },
+    {
+      "key": "norvik|ai strategy engineer",
+      "company": "Norvik GmbH",
+      "title": "AI Strategy Engineer"
+    }
+  ],
+  "messages": [
+    {
+      "from": "Marc Delaunay <m.delaunay@aurex.energy>",
+      "subject": "Video interview for Lead Product Manager - Alex Example",
+      "body": "Event link:\nhttps://aurex.recruitee.com/v/events/cft1y2kchwv2\n\nInformation for the candidate:\nYou've been invited to Video interview about the Lead Product Manager position at Aurex Energy.\nInterviewers: Marc Delaunay\nCan't make it?\nReschedule<https://aurex.recruitee.com/v/i/s/8eo3wayyf7yf/s7c7kdhb26gs/reschedule>",
+      "expect": "invited"
+    },
+    {
+      "from": "Aurex Energy <notifications@recruiteemail.com>",
+      "subject": "Confirmation: Video interview on Monday, 27 July 2026 at 14:05 - 14:35 with Marc Delaunay",
+      "body": "Video interview for Lead Product Manager - Alex Example\n\nWhen\nMonday 27 July 2026 at 14:05 - 14:35 Europe/Berlin (+02:00)\nCan't make it? Reschedule\n\nInterviewers\nMarc Delaunay\n\nCompany\nAurex Energy",
+      "expect": "invited"
+    },
+    {
+      "_note": "The one that was actually missed in real life. Plain prose, no ATS, no booking link.",
+      "from": "Marc Delaunay <marc.aurex@recruitee-mail.com>",
+      "subject": "Meet and Greet - Aurex Energy",
+      "body": "Hi Alex,\n\nThank you for your interest in Aurex Energy and for applying for the Lead Product Manager role! I'd like to schedule a short call to learn more about you. During the call, I will align you on the role and the team, and answer any questions you may have.\n\n--\nTalent and People Lead\nMarc Delaunay",
+      "expect": "invited"
+    },
+    {
+      "_note": "Follow-up nudge on the ignored invitation — almost no words to go on.",
+      "from": "Marc Delaunay <marc.aurex@recruitee-mail.com>",
+      "subject": "Re: Meet and Greet - Aurex Energy",
+      "body": "Hi Alex,\n\nFollowing up with you on this :)\n\n--\nTalent and People Lead\nMarc Delaunay",
+      "expect": "invited"
+    },
+    {
+      "_note": "German invitation: the ask is a calendar link, not an 'invite' verb.",
+      "from": "Lukas Berger <l.berger@kestrel.com>",
+      "subject": "Bewerbung Head of Product & Technology bei Kestrel",
+      "body": "Hi Alex\nVielen Dank für dein Interesse und deine Bewerbung bei Kestrel.\nGerne würde ich in einem ersten 15-minütigen Gespräch gegenseitige Erwartungen sowie den Cultural Fit besprechen. Wähle dafür einfach einen freien Termin in meinem Kalender aus:\nBook time with Lukas Berger: Cultural fit call • This link will expire on: October 13, 2026\nIch freue mich auf den Austausch.\nBeste Grüsse, Lukas",
+      "expect": "invited"
+    },
+    {
+      "from": "Lukas Berger <l.berger@kestrel.com>",
+      "subject": "Alex Example - Cultural fit call",
+      "body": "This meeting was scheduled from the bookings page of Lukas Berger. Use the following link to reschedule or cancel this meeting: Manage meeting\n\n-----Note added from booking page on Friday, July 17, 2026",
+      "expect": "invited"
+    },
+    {
+      "_note": "Same sender and thread as a real invitation, but pure machine noise.",
+      "from": "Lukas Berger <l.berger@kestrel.com>",
+      "subject": "Verify your email address",
+      "body": "Your verification code is 903763\n\nThis is an automatically-generated message from the bookings page of Lukas Berger. If you did not make this request, please ignore it – this meeting will not be booked.",
+      "expect": "other"
+    },
+    {
+      "_note": "ATS acknowledgement that mentions interviews conditionally — the false-invite trap.",
+      "from": "Cindral <no-reply@hire.lever.co>",
+      "subject": "Thank you for your application to join Cindral",
+      "body": "Thank you very much for applying for our Technical Product Lead position. We'd like to let you know that we have received your application. If you are selected for an interview, a member of our talent team will be in touch with you directly.",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "Fennick <no-reply@hire.lever.co>",
+      "subject": "Thank you for your application to Fennick",
+      "body": "Hi Alex,\n\nThank you for your interest in Fennick! We wanted to let you know we received your application for Senior Technical Product Manager, and we are delighted that you would consider joining our team.",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "Quillon <noreply@candidates.workablemail.com>",
+      "subject": "Thanks for applying to Quillon",
+      "body": "Quillon\n\nYour application for the Lead AI Product Manager job was submitted successfully. Here's a copy of your application data for safekeeping.",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "Kestrel <no-reply@msg.join.com>",
+      "subject": "Wir haben deine Bewerbung für die Position bei Kestrel AG erhalten",
+      "body": "Hallo Alex, vielen Dank für deine Bewerbung für die Position: Head of Product & Technology (m/w/d) - 100%. Derzeit screenen wir alle eingegangenen Unterlagen. Sollte dein Profil unseren Anforderungen entsprechen, melden wir uns bei dir.",
+      "expect": "acknowledged"
+    },
+    {
+      "_note": "German soft rejection with no standard rejection phrasing — a known heuristic miss.",
+      "from": "Railnet Karriere <karriere@railnet.ch>",
+      "subject": "AW: Bewerbung als Technical Product Owner / Project Manager",
+      "body": "Lieber Alex\n\nVielen Dank für deine spannende Bewerbung und dein Interesse. Die Stelle beschäftigt sich intensiv mit den Schweizer Bahnen, weshalb wir jemanden suchen, der Deutsch als Muttersprache oder auf muttersprachlichem Niveau spricht. Wir wünschen dir viel Erfolg bei der weiteren Suche.",
+      "expect": "rejected"
+    },
+    {
+      "from": "Marlow Careers <careers@marlow.de>",
+      "subject": "Update on Your Application at Marlow",
+      "body": "Dear Alex Example,\n\nThank you for taking the time to apply for the Senior Product Manager position at Marlow. We appreciate your interest in joining our team and the skills and experience you brought forward in your application.\n\nAfter reviewing the role and our current hiring needs, we have made the decision to close this position. As a result, we will not be moving forward with your application at this time.\n\nAlthough this role has been closed, we encourage you to stay connected with us for future opportunities that may better align with your qualifications.\n\nThank you again for considering Marlow. We wish you all the best in your job search and hope our paths may cross in the future!\n\nKind regards,\nMarlow Hiring Team",
+      "expect": "rejected"
+    },
+    {
+      "from": "Nadia Petrov <nadia.petrov@tervant.io>",
+      "subject": "Your application at Tervant 🚀",
+      "body": "Hi Alex,\n\nThank you for taking the time to apply for our Product Manager - Desktop & Web (f/m/d) - Remote in Germany role at Tervant. It means a lot to us that you considered joining our team!\n\nWe've received many applications from talented individuals like yourself. After careful review, we've decided to move forward with candidates whose experience and skills align more closely with our current requirements. Due to the high volume of applications, we're unable to provide individual feedback at this stage of our process.\n\nThank you again for your interest in being part of our mission to shape the future of engineering. We wish you all the best in your job search!\n\nBest regards,\nNadia",
+      "expect": "rejected"
+    },
+    {
+      "from": "Lumera Talent <talent@lumera.com>",
+      "subject": "Update: Your application to Data Operations Lead at Lumera",
+      "body": "Hi Alex,\n\nThank you for your interest in the Data Operations Lead position at Lumera. After careful consideration, we regret to inform you that we will not be moving forward with your application. We received a large number of strong applications for this role.\n\nWe wish you the very best with your search.",
+      "expect": "rejected"
+    },
+    {
+      "from": "Orvane <no-reply@ashbyhq.com>",
+      "subject": "Update on your Orvane application",
+      "body": "Hi Alex,\n\nThank you for your interest in joining Orvane. After reviewing your application, we've decided to move forward with other candidates whose experience more closely aligns with what we're looking for in this role.\n\nWe appreciate the time you took to apply and wish you the best in your search.",
+      "expect": "rejected"
+    },
+    {
+      "from": "Brightmill People <people.brightmill@recruitee-mail.com>",
+      "subject": "Brightmill | Application Feedback",
+      "body": "Dear Alex,\n\nThank you for taking an interest in working with Brightmill! After very careful consideration of your application against the criteria we have specified for this position, we regret to inform you that we will not be taking your application further on this occasion.\n\nWe wish you every success in your search.",
+      "expect": "rejected"
+    },
+    {
+      "from": "Scout Partners <info@scoutpartners.ch>",
+      "subject": "Application Feedback Product & Innovation Manager, Motor & Property Insurance (Private Customers)",
+      "body": "Dear Mr Alex Example,\n\nI would like to thank you for your recent application for the above advert. As I am sure you can imagine, we have received a large number of extremely impressive applications, and after careful consideration I am sorry to say that your application has not been successful on this occasion.\n\nI wish you every success in your future career.",
+      "expect": "rejected"
+    },
+    {
+      "from": "Norvik Jobs <jobs@halden.de>",
+      "subject": "Your Application at Norvik – Status Update",
+      "body": "Hello Alex,\n\nThank you for your application and your interest in a position at Norvik. We have received your documents and are already in the process of reviewing them carefully. As we receive many applications, this may take a little time. We will get back to you as soon as we can.\n\nBest regards,\nThe Norvik Talent Team",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "Ines Vogel <i.vogel@calder-group.com>",
+      "subject": "Your application as Lead Business Innovation",
+      "body": "Dear Alex Example\n\nWe refer to your application and thank you for your interest shown in our company. The review of your documents will take some time. We will get in touch with you as soon as possible.\n\nKind regards\nHuman Resources",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "Brightpath Recruiting <applications@brightpath.jobs>",
+      "subject": "Your Application from 15.07.2026",
+      "body": "Dear ALEX EXAMPLE,\n\nThank you for signing up and showing interest in Brightpath Recruiting with your signup on 15.07.2026! We truly appreciate your enthusiasm and are thrilled to welcome you as part of our talent network.",
+      "expect": "acknowledged"
+    },
+    {
+      "from": "HiPeople <noreply@emails.hipeople.io>",
+      "subject": "One more step to complete your application for the PPP-0421 AI Strategy Engineer role with Norvik GmbH",
+      "body": "Hi Alex,\n\nHiPeople works with Norvik GmbH to support their hiring process. To continue your application, please complete a short assessment. It takes around 20 minutes and you can do it whenever suits you best.",
+      "expect": "action_needed",
+      "_note": "Was labelled 'other' when this corpus was built — a miss on my part. It is the same stalled-application pattern as the resume-upload one, with a 20-minute assessment instead of a document."
+    },
+    {
+      "from": "Elena Marchetti <e.marchetti@northgate.com>",
+      "subject": "Re: Outplacement Support",
+      "body": "Hello Alex,\n\nI have contacted LHH Switzerland on your behalf to arrange the outplacement as per the agreement. Could you please confirm the preferred location for the job search. I will follow up with them afterwards.\n\nBest,\nElena",
+      "expect": "other"
+    },
+    {
+      "from": "PathToHired <noreply@mail.pathtohired.com>",
+      "subject": "Stop winging interviews",
+      "body": "Hey Alex Example 👋 You've tracked the jobs. You've polished the CV. You've written the cover letters. Now what happens when they actually call you in? 🎤 Interview Trainer — practice with realistic questions and get instant feedback.",
+      "expect": "noise"
+    },
+    {
+      "from": "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>",
+      "subject": "Digital Product Manager at Vantor: up to £105K/year",
+      "body": "7/23/2026 — new jobs matching your alert. Digital Product Manager at Vantor. See all new jobs.",
+      "expect": "noise"
+    },
+    {
+      "from": "LinkedIn <jobs-noreply@linkedin.com>",
+      "subject": "New jobs similar to (Senior) Product Manager - Web at Zephra",
+      "body": "Jobs similar to (Senior) Product Manager - Web at Zephra. View jobs.",
+      "expect": "noise"
+    },
+    {
+      "from": "LinkedIn <messages-noreply@linkedin.com>",
+      "subject": "Jane Doe and John Roe are hiring",
+      "body": "See more career trends in your network. Jane Doe and John Roe are hiring.",
+      "expect": "noise"
+    },
+    {
+      "from": "Workwise <talent.team@workwise.io>",
+      "subject": "Jobbenachrichtigung: Ein neuer Job für deine Suche",
+      "body": "Jobbenachrichtigung: Ein neuer Job für deine Suche. 1 Job passt zu deiner letzten Jobsuche: Entwickler für Frontend und Backend (m/w/d), Nova Labs GmbH, Lörrach, Remote Job, 32 bis 40 Stunden.",
+      "expect": "noise"
+    },
+    {
+      "from": "Resume.io Jobs <jobs@alerts.resume.io>",
+      "subject": "Recommended Job Alert for July 23, 2026",
+      "body": "New Matches: Karriereportal smzh and more. View your recommended jobs.",
+      "expect": "noise"
+    },
+    {
+      "from": "Remote Climate Jobs <mail@remoteclimatejobs.co>",
+      "subject": "Remote Climate Jobs: July 24th 2026",
+      "body": "featuring jobs from Example Org One, Example Org Two & Example Org Three",
+      "expect": "noise"
+    },
+    {
+      "from": "Ravi Kapoor <r.kapoor@example-edu.org>",
+      "subject": "Alex Example, take the next step in your leadership journey with Example Business School Executive Education",
+      "body": "Apply to a senior executive programme. Hi Alex Example, As a leader who is navigating complex business challenges, continuous evolution is essential.",
+      "expect": "noise"
+    },
+    {
+      "from": "Google <no-reply@accounts.google.com>",
+      "subject": "Security alert",
+      "body": "App password created to sign in to your account. If you didn't generate this password for jobfinder-general, someone might be using your account.",
+      "expect": "noise"
+    },
+    {
+      "from": "Reddit <noreply@redditmail.com>",
+      "subject": "u/someuser replied to your comment in r/singularity",
+      "body": "Not across the board, probably only on coding. So how come it performs better?",
+      "expect": "noise"
+    },
+    {
+      "from": "Business Insider <newsletter@email.businessinsider.com>",
+      "subject": "Today: Coders' safe-job era is ending",
+      "body": "Plus: Top VCs, and a streamer's free pitch. View in browser. Happy Friday!",
+      "expect": "noise"
+    },
+    {
+      "from": "Thuisbezorgd <newsletter@update.thuisbezorgd.nl>",
+      "subject": "Alsjeblieft, Alex, 2x € 8 korting voor jou 🤩",
+      "body": "Dat is een dubbele portie lekkers. Bestel nu met korting.",
+      "expect": "noise"
+    },
+    {
+      "from": "Odido <_noreply@odido.nl>",
+      "subject": "Hier is de factuur voor je Odido abonnement voor thuis",
+      "body": "Hallo Alex, De nieuwe Odido factuur voor je Internet, TV en/of Vast Bellen abonnement staat in de bijlage van deze mail.",
+      "expect": "noise"
+    },
+    {
+      "_note": "Screening questions standing between the application and the pile. The link itself says /assessment/invite, so 'invite' in the body proves nothing.",
+      "from": "Dunmore via JOIN <no-reply@msg.join.com>",
+      "subject": "Complete two questions to apply as Founding Engineer at Dunmore",
+      "body": "Hi Alex,\n\nPlease complete 2 questions here to finalize your application: https://candidates.join.com/candidate/assessment/invite?key=REDACTED\n\nI appreciate your time and look forward to reviewing your answers personally.\n\nThank you,\nDunmore Recruiting Team",
+      "expect": "action_needed"
+    },
+    {
+      "_note": "Same pattern from a screening vendor: the application is parked until a document is re-uploaded.",
+      "from": "HiPeople <noreply@emails.hipeople.io>",
+      "subject": "One more step to complete your application for the PPP-0421 AI Strategy Engineer role with Norvik GmbH",
+      "body": "Hi Alex,\n\nHiPeople works with Norvik GmbH to support their hiring process.\n\nTo continue your application for the PPP-0421 AI Strategy Engineer at Norvik GmbH, please upload your resume once more. This allows Norvik GmbH to review every application consistently and fairly, assisted by AI.\n\nIt takes less than a minute.\n\nClick below to securely upload your file and complete your application.\n\nUpload Resume\n\nThank you for taking the time to apply.\n— The HiPeople Team on behalf of Norvik GmbH\n\nHaving trouble uploading your resume? Our support team is here to help.\n\nUnsubscribe | Privacy Policy | Support",
+      "expect": "action_needed"
+    },
+    {
+      "_note": "The contrast case, from the same ATS as the Dunmore one: nothing to do, and the 'next steps' are conditional on a match. Must not read as invited.",
+      "from": "Dunmore via JOIN <no-reply@msg.join.com>",
+      "subject": "Dunmore: Application review in process. No AI involved.",
+      "body": "Hi Alex,\n\nYou have successfully submitted your application for the position as Founding Engineer at Dunmore.\n\nNo AI will review your application. I do everything myself still.\n\nShould your profile match our requirements, we will be in touch to schedule the next steps in the process.\n\nCheers,\nDunmore",
+      "expect": "acknowledged"
+    }
+  ]
+}

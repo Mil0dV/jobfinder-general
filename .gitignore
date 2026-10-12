@@ -87,3 +87,7 @@ location_debug.csv
 
 .jobfinder_wttj_profile/
 .jobfinder_wttj_capture*.jsonl
+
+# Local scratch: project snapshot zip, old debug dumps
+jobfinder-general.zip
+location_debug*.csv

@@ -25,7 +25,21 @@ data class Job(
     var companyInfo: String? = null,
 ) {
     val normUrl: String get() = normalizeUrl(url)
-    val decisionKey: String get() = normUrl.ifEmpty { "$company|$title" }
+
+    /**
+     * Cross-device identity: company|title (lowercased), or the normalized URL
+     * when there's no real company+title. MUST match norm_key in sync.py — the
+     * dedup key, the Firestore doc id and the swipe-decision key are all this
+     * string, so the same role from two sources (different URLs) is one job on
+     * every device and decisions converge.
+     */
+    val decisionKey: String
+        get() {
+            val c = company.trim().lowercase()
+            val t = title.trim().lowercase()
+            if (c.isNotEmpty() && c != "unknown" && t.isNotEmpty()) return "$c|$t"
+            return normUrl.ifEmpty { if (c.isNotEmpty() && t.isNotEmpty()) "$c|$t" else "" }
+        }
 
     /** A "pearl" supermatch: strong on all three scores, with at least one 5. */
     val isPearl: Boolean

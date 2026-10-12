@@ -46,6 +46,7 @@ fun MenuScreen(vm: AppViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(Term.bg)
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -59,26 +60,44 @@ fun MenuScreen(vm: AppViewModel) {
         Spacer(Modifier.height(32.dp))
         MenuItem("Search my target-role profile") { vm.startSearch(Profile.PROFILE_QUERY) }
         MenuItem("Search a specific role") { vm.navigate(Screen.RoleInput) }
+        MenuItem("Best general roles (non-climate)") {
+            vm.startSearch(Profile.PROFILE_QUERY, nonClimate = true)
+        }
         MenuItem("Review undecided saved jobs") { vm.reviewSavedJobs() }
+        MenuItem(
+            // Unfinished applications count toward the badge too — an invite you
+            // never got because you skipped two screening questions is the same
+            // miss this screen exists to prevent.
+            label = "Replies" + if (vm.waitingCount > 0) " (✉ ${vm.waitingCount})" else "",
+            highlight = vm.waitingCount > 0,
+        ) { vm.navigate(Screen.Replies) }
         Spacer(Modifier.height(32.dp))
         TermText("or share a job URL to this app", color = Term.dim, fontSize = 11.sp)
         TermText("to write a cover letter / answers", color = Term.dim, fontSize = 11.sp)
-        vm.syncStatus?.let {
+        vm.inboxStatus?.let {
             Spacer(Modifier.height(20.dp))
+            TermText(
+                it,
+                color = if (vm.waitingCount > 0) Term.magenta else Term.dim,
+                fontSize = 10.sp,
+            )
+        }
+        vm.syncStatus?.let {
+            Spacer(Modifier.height(if (vm.inboxStatus == null) 20.dp else 4.dp))
             TermText(it, color = Term.dim, fontSize = 10.sp)
         }
     }
 }
 
 @Composable
-private fun MenuItem(label: String, onClick: () -> Unit) {
+private fun MenuItem(label: String, highlight: Boolean = false, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .clickable { onClick() }
             .padding(vertical = 10.dp),
     ) {
-        TermText("▸ ", color = Term.green)
-        TermText(label, bold = true)
+        TermText("▸ ", color = if (highlight) Term.magenta else Term.green)
+        TermText(label, bold = true, color = if (highlight) Term.magenta else Term.fg)
     }
 }
 
@@ -91,6 +110,7 @@ fun RoleInputScreen(vm: AppViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .background(Term.bg)
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -166,13 +186,17 @@ fun SearchScreen(vm: AppViewModel) {
     val spin = SPINNER[frame % SPINNER.length]
     val globe = GLOBES[(frame / 3) % GLOBES.size]
     val plant = PLANTS[minOf(PLANTS.size - 1, pct * PLANTS.size / 101)]
-    val label = if (vm.searchQuery == Profile.PROFILE_QUERY) "your target-role profile"
-    else "“${vm.searchQuery}”"
+    val label = when {
+        vm.searchNonClimate -> "best general roles (non-climate)"
+        vm.searchQuery == Profile.PROFILE_QUERY -> "your target-role profile"
+        else -> "“${vm.searchQuery}”"
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Term.bg)
+            .verticalScroll(rememberScrollState())
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

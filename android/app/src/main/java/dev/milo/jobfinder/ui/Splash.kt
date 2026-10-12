@@ -63,9 +63,15 @@ fun SplashScreen(onContinue: () -> Unit) {
             .background(Term.bg)
             .clickable { onContinue() },
     ) {
-        // Fit the 71-char-wide art to the screen: monospace glyph width ≈ 0.6 em.
+        // Fit the 71-char-wide, ART.size-line-tall art to the screen: monospace glyph
+        // width ≈ 0.62 em, line height ≈ 1.35 em. In landscape the width bound alone
+        // would blow past the (much shorter) available height, so cap by both axes —
+        // whichever is tighter wins.
         val fontSize = with(LocalDensity.current) {
-            (constraints.maxWidth / 71f / 0.62f).toSp()
+            val byWidth = constraints.maxWidth / 71f / 0.62f
+            val footerPx = 24.dp.toPx() + 19.dp.toPx() // spacer + "tap anywhere" line
+            val byHeight = (constraints.maxHeight - footerPx) / ART.size / 1.35f
+            minOf(byWidth, byHeight).coerceAtLeast(6.dp.toPx()).toSp()
         }
         Column(
             modifier = Modifier.fillMaxSize(),
