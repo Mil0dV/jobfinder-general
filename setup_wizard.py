@@ -428,6 +428,18 @@ def run_setup() -> bool:
     if sample:
         _generate_style_guide([p.strip() for p in sample.split(",") if p.strip()])
 
+    print("\nOptional: a LinkedIn connections export lets the tool search the job boards")
+    print("of companies where you already know someone (LinkedIn → Settings → Data")
+    print("privacy → Get a copy of your data → Connections).")
+    export = _input("Path to Connections.csv (Enter to skip)")
+    if export:
+        from connections import import_connections
+
+        try:
+            import_connections(export)
+        except (OSError, ValueError) as e:
+            print(f"   Could not import connections: {e}")
+
     print("\nSetup complete. Restart the tool to pick up the new profile:")
     print("   uv run python cli.py --tui")
     return True

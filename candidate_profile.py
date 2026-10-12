@@ -34,7 +34,7 @@ _DEFAULT_ROLE_PATTERNS = [
     r"(head|director|vp|vice president) of (product|engineering|software|technology|tech)\b",
     r"chief (technology|technical|product) officer|\bcto\b|\bcpo\b",
     r"(founding|first|principal|staff|lead) (software |full[\s-]?stack |platform |ai |product )?engineer",
-    r"product (owner|lead|director)",
+    r"product (owner|lead|director|manager)",
     r"(technical|platform|senior|principal|staff|group|lead) product manager",
     r"tech(nical)? lead",
     r"engineering (director|lead|manager)",
@@ -53,6 +53,7 @@ _DEFAULT_QUERY_SEEDS = [
     "head of product",
     "CTO",
     "technical product manager",
+    "product manager",
     "director of engineering",
     "founding engineer",
     "product lead",
@@ -229,6 +230,11 @@ DRUNK_MODE_ENABLED = bool(_config.get("drunk_mode", True))
 _pearls = _config.get("pearls") or {}
 PEARL_MIN_EACH = int(_pearls.get("min_each", 4))
 PEARL_MIN_TOTAL = int(_pearls.get("min_total", 13))
+
+# "Best general roles (non-climate)": postings that fail the climate gate still
+# make a deck when the ROLE fit is strong. Override via profile.json
+# "nonclimate_min_fit".
+NONCLIMATE_MIN_FIT = int(_config.get("nonclimate_min_fit", 4))
 
 
 def is_pearl(job: dict) -> bool:

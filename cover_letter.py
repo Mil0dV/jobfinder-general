@@ -80,6 +80,32 @@ def _candidate_name() -> str:
     return candidate_name()
 
 
+def _ensure_signoff(text: str) -> str:
+    """Cover letters must always end with the canonical closing. It only ever
+    came from the style-guide examples, and models (especially unthinking ones)
+    sometimes drop or invent it. Strip whatever closing the model produced —
+    trailing salutation lines, a bare name line, or an inline "Regards, <name>"
+    tail — and append the canonical one."""
+    name = _candidate_name()
+    lines = text.rstrip().split("\n")
+    close = re.compile(
+        r"^\s*(?:best|kind|warm|many)?\s*(?:regards|cheers|thanks|sincerely|yours|"
+        r"groeten|groetjes|met vriendelijke groet|alles goede)\b[^.]*[,.]?\s*$",
+        re.IGNORECASE,
+    )
+    name_line = re.compile(rf"^\s*{re.escape(name)}[.,\s]*$", re.IGNORECASE)
+    while len(lines) > 1 and (close.match(lines[-1]) or name_line.match(lines[-1])):
+        lines.pop()
+    body = "\n".join(lines).rstrip()
+    body = re.sub(
+        rf"[.,\s]*(?:kind |best |warm )?regards,?\s+{re.escape(name)}\s*$",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).rstrip()
+    return f"{body}\n\nRegards,\n{name}"
+
+
 # ---------------------------------------------------------------------------
 # Job selection from CSV
 # ---------------------------------------------------------------------------
@@ -505,8 +531,9 @@ def _stream_response(
     try:
         if revise_instruction is None:
             with client.messages.stream(
-                model="claude-opus-4-7",
+                model=llm.generation_model("claude-opus-4-7"),
                 max_tokens=1024,
+                thinking=llm.generation_thinking(),
                 system=system,
                 messages=messages,
             ) as stream:
@@ -514,23 +541,31 @@ def _stream_response(
                     full_text += text
                     print(text, end="", flush=True)
         else:
-            print("   Drafting...", flush=True)
+            print("   Drafting with " + llm.generation_model("claude-opus-4-7"), flush=True)
             draft = client.messages.create(
-                model="claude-opus-4-7",
+                model=llm.generation_model("claude-opus-4-7"),
                 max_tokens=1024,
+                thinking=llm.generation_thinking(),
                 system=system,
                 messages=messages,
             )
             draft_text = "".join(b.text for b in draft.content if b.type == "text")
-            messages += [
-                {"role": "assistant", "content": draft_text},
-                {"role": "user", "content": revise_instruction},
-            ]
-            print(f"   {revise_label}\n", flush=True)
+            if draft_text.strip():
+                messages += [
+                    {"role": "assistant", "content": draft_text},
+                    {"role": "user", "content": revise_instruction},
+                ]
+                print(f"   {revise_label}\n", flush=True)
+            else:
+                # Reasoning models occasionally return an empty visible draft;
+                # an empty assistant turn is a hard API error, so fall back to
+                # streaming a fresh single pass instead.
+                print("   (draft came back empty; writing in one pass)\n", flush=True)
 
             with client.messages.stream(
-                model="claude-opus-4-7",
+                model=llm.generation_model("claude-opus-4-7"),
                 max_tokens=1024,
+                thinking=llm.tellcheck_thinking(),
                 system=system,
                 messages=messages,
             ) as stream:
@@ -600,23 +635,33 @@ def extract_job_meta(text: str, job: dict | None = None) -> tuple[str, str]:
                     "role": "user",
                     "content": (
                         "Extract the hiring company name and job title from the text below. "
-                        "Reply with exactly this format (no extra words): COMPANY | ROLE\n\n"
-                        + text[:3000]
+                        "Reply with exactly this format (no extra words): COMPANY | ROLE\n"
+                        "If the hiring company is not explicitly named (e.g. an agency posting "
+                        "for 'our client'), use UNKNOWN as the company.\n\n" + text[:3000]
                     ),
                 }
             ],
         )
         parts = response.content[0].text.strip().split("|")
         if len(parts) >= 2:
-            return parts[0].strip(), parts[1].strip()
+            company = parts[0].strip()
+            if company.upper() == "UNKNOWN":
+                company = "Unknown"
+            return company, parts[1].strip()
     except Exception:
         pass
     return "Unknown", "Role"
 
 
 def make_output_stem(prefix: str, company: str, role: str) -> str:
-    """Build a clean filename stem: e.g. 'CL_Ionity - Head of Product'."""
-    return f"{prefix}_{_filename_safe(company)} - {_filename_safe(role)}"
+    """Build a clean filename stem: e.g. 'CL_Ionity - Head of Product'.
+
+    When the company is unknown, it is left out: 'CL - Head of Product'.
+    """
+    company = _filename_safe(company)
+    if not company or company.lower() == "unknown":
+        return f"{prefix} - {_filename_safe(role)}"
+    return f"{prefix}_{company} - {_filename_safe(role)}"
 
 
 def _save_cover_letter_pdf(text: str, filename_stem: str) -> str:
@@ -696,7 +741,9 @@ def generate_cover_letter(
 
     # Resolve company/role for header and filename
     company, title = extract_job_meta(job_context, job)
-    header = f"Cover Letter: {title} @ {company}"
+    header = f"Cover Letter: {title}"
+    if company and company.lower() != "unknown":
+        header += f" @ {company}"
     if drunk:
         from candidate_profile import is_pearl
 
@@ -712,7 +759,10 @@ def generate_cover_letter(
         text = _stream_response(_cover_letter_system_prompt(), user_prompt, header)
 
     if text:
-        _save_cover_letter_pdf(text, make_output_stem("CL", company, title))
+        signed = _ensure_signoff(text)
+        if signed.strip() != text.strip():
+            print(f"\nRegards,\n{_candidate_name()}")
+        _save_cover_letter_pdf(signed, make_output_stem("CL", company, title))
 
 
 def estimate_salary(job: dict | None = None, url: str = "", description: str = ""):

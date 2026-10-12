@@ -106,13 +106,13 @@ def _handle_resume_command(cmd: dict):
 
 
 def _handle_apply_command(cmd: dict):
-    """Execute combined cover letter + tailored resume."""
+    """Execute combined tailored resume + cover letter (resume first)."""
     job, role_desc = _resolve_job_context(cmd)
     if not role_desc:
         return
     extra = cmd.get("extra_context", "")
-    generate_cover_letter(job, extra_context=extra, url=cmd.get("url") or "")
     tailor_resume(role_desc, extra_context=extra)
+    generate_cover_letter(job, extra_context=extra, url=cmd.get("url") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -337,10 +337,10 @@ def _gen(ctx, kind, job, url, role_desc, extra="", question=None):
     if kind == "resume":
         tailor_resume(role_desc, extra_context=extra, output_name=resume_name)
     elif kind == "apply":
+        tailor_resume(role_desc, extra_context=extra, output_name=resume_name)
         generate_cover_letter(
             job, extra_context=extra, url=url, description=role_desc if not url else "", drunk=drunk
         )
-        tailor_resume(role_desc, extra_context=extra, output_name=resume_name)
     elif kind == "salary":
         estimate_salary(job=job, url=url, description=role_desc if not url else "")
     elif kind == "answer":

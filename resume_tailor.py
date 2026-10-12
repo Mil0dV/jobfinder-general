@@ -7,6 +7,7 @@ then rebuilds the docx with the original styling and converts to PDF.
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 from io import BytesIO
@@ -336,7 +337,9 @@ RULES — follow these strictly:
 2. NEVER fabricate experience, skills, or achievements. Only use what's already there.
 3. NEVER add buzzwords, corporate-speak, or generic filler. Keep the candidate's direct, plain voice.
 4. Allowed edits:
-   - Reword the Professional Statement to emphasize relevant experience (keep same length)
+   - Reword the Professional Statement to emphasize relevant experience (keep same \
+     length). Keep the candidate's phrasing where it already fits; favor moving, \
+     dropping or adding a clause over rewriting whole sentences.
    - Reorder bullet points to put the most relevant ones first
    - Slightly rephrase a bullet to highlight a relevant aspect (keep factual)
    - Core Competencies: select ONLY the 6-8 most relevant items for this role and drop
@@ -346,14 +349,23 @@ RULES — follow these strictly:
    - Add a skill to Technical Skills ONLY if it's clearly implied by their experience
 5. Do NOT touch: name, contact, dates, job titles, company names, education, languages, interests.
 6. Do NOT lengthen the resume. If you add a word somewhere, remove one elsewhere.
-7. The result should read naturally — a human reviewer should not detect AI involvement.
+7. Mirror the role's emphasis: lead with the right Core Competencies and Technical \
+   Skills items, reorder bullets, and reword the Professional Statement where it \
+   helps. Never stuff keywords the role did not ask for.
+8. The result must read like a person typed it in one sitting. Several short plain \
+   sentences beat one long stacked one: no semicolon chains, no em-dash interruptions, \
+   no rule-of-three lists, no "not just X but Y", no grandiose verbs ("woven", \
+   "spearheaded"), no self-descriptions that sound written ("fluent X and fluent Y"). \
+   A human reviewer should not detect AI involvement.
 
 STYLE REFERENCE (for tone):
 {style_guide}
 
 OUTPUT FORMAT:
-Return the complete resume structure — unchanged sections included verbatim. \
-No commentary."""
+Return ONLY a JSON object containing the fields you actually changed — omit \
+unchanged fields entirely. When a change touches an experiences entry, include \
+that entry COMPLETE (all subfields) with the identical title. If nothing should \
+change, return {{}}. No commentary."""
 
 
 # JSON schema enforced via output_config.format so the API guarantees the
@@ -402,8 +414,75 @@ RESUME_SCHEMA = {
 }
 
 
+# Diff-mode output: each pass returns only the fields it actually edited.
+# Echoing the unchanged resume back out costs thousands of generation tokens at
+# the rig's ~47 t/s for zero information.
+DIFF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        k: v for k, v in RESUME_SCHEMA["properties"].items() if k not in ("name", "contact")
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+def _apply_patch(current: dict, patch: dict) -> dict:
+    """Overlay a partial resume JSON onto current. Experience entries merge
+    field-wise onto the entry with the same title; unknown titles are ignored."""
+    out = dict(current)
+    for key, value in patch.items():
+        if key not in RESUME_SCHEMA["properties"] or key in ("name", "contact"):
+            continue
+        if key == "experiences" and isinstance(value, list):
+            entries = list(out.get("experiences", []))
+            by_title = {
+                e.get("title", "").lower(): i for i, e in enumerate(entries) if isinstance(e, dict)
+            }
+            for entry in value:
+                if not isinstance(entry, dict):
+                    continue
+                idx = by_title.get(entry.get("title", "").lower())
+                if idx is not None:
+                    entries[idx] = {**entries[idx], **entry}
+            out["experiences"] = entries
+        else:
+            out[key] = value
+    return out
+
+
+_LIST_MIN, _LIST_MAX = 6, 8
+
+
+def _enforce_list_selection(base_str: str, tailored_str: str) -> str:
+    """Cap selected competencies/skills at _LIST_MAX, in the model's relevance order.
+
+    Only genuine base items survive (invented or reworded ones are dropped); if the
+    model selected fewer than _LIST_MIN, the remainder is backfilled in base order.
+    """
+    base_items = [x.strip() for x in base_str.split("•") if x.strip()]
+    canonical = {b.lower(): b for b in base_items}
+    items = []
+    for raw in tailored_str.split("•"):
+        item = canonical.get(raw.strip().lower())
+        if item and item not in items:
+            items.append(item)
+    if len(items) > _LIST_MAX:
+        items = items[:_LIST_MAX]
+    for b in base_items:
+        if len(items) >= _LIST_MIN:
+            break
+        if b not in items:
+            items.append(b)
+    return " • ".join(items) if items else base_str
+
+
 def get_tailored_resume(role_description: str) -> dict:
-    """Send resume + role description to Claude, get back tailored resume data."""
+    """Send resume + role description to Claude, get back tailored resume data.
+
+    Two passes, mirroring cover_letter: tailor, then a skeptical-editor tell-check
+    over the edited fields (the draft survives a failed tell-check).
+    """
     base = get_base_resume()
     client = _get_client()
     style_guide = _load_style_guide()
@@ -421,16 +500,17 @@ Here is the role description to tailor for:
 
 {role_description}
 
-Return the tailored resume as JSON."""
+Return only the fields you changed, as a JSON patch (see OUTPUT FORMAT)."""
 
     print("   Tailoring resume with Claude...")
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=llm.generation_model("claude-sonnet-4-6"),
         max_tokens=8192,
+        thinking=llm.generation_thinking(),
         system=system,
         messages=[{"role": "user", "content": user_msg}],
-        output_config={"format": {"type": "json_schema", "schema": RESUME_SCHEMA}},
+        output_config={"format": {"type": "json_schema", "schema": DIFF_SCHEMA}},
     )
 
     if response.stop_reason == "max_tokens":
@@ -440,12 +520,205 @@ Return the tailored resume as JSON."""
     text = next(b.text for b in response.content if b.type == "text")
 
     try:
-        return json.loads(text)
+        patch = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"Error: Could not parse Claude's response as JSON: {e}")
         print("Raw response (first 500 chars):")
         print(text[:500])
         sys.exit(1)
+
+    tailored = _apply_patch(payload, patch)
+
+    changed = _changed_fields(payload, tailored)
+    if changed:
+        revised = _tellcheck(payload, tailored, changed)
+        if revised:
+            tailored = revised
+    # Models reliably ignore the 6-8 selection rule; enforce it in code.
+    for key in ("core_competencies", "technical_skills"):
+        tailored[key] = _enforce_list_selection(payload.get(key, ""), tailored.get(key, ""))
+    return tailored
+
+
+_TELLCHECK_SYSTEM_PROMPT = """\
+You are a skeptical resume editor. A previous pass tailored a resume and may have \
+introduced AI-scented prose. Re-read the tailored resume. In the CHANGED fields only, \
+hunt for: sentences glued together from stacked clauses with semicolons or em-dash \
+interruptions; one sentence carrying three ideas; rule-of-three lists; "not just X \
+but Y" constructions; buzzwords ("leverage", "impact-driven", "stakeholder", \
+"fast-paced"); self-descriptions that sound written ("fluent X and fluent Y", \
+"passionate about"); grandiose verbs ("woven", "spearheaded"); uniform bullet rhythm \
+across a section.
+Fix what reeks: short plain sentences, one idea per sentence, plain verbs. Rewrite, \
+never remove: every substantive claim in the tailored draft stays, just expressed \
+plainer, and the emphasis the tailor chose stays. NEVER add new skills, claims or \
+keywords. Do NOT include fields that are not listed as changed — they are already \
+correct.
+Output ONLY a JSON object with the changed fields listed below. When an experiences \
+entry is listed, return that entry COMPLETE with the identical title. No commentary."""
+
+
+def _changed_fields(base: dict, tailored: dict) -> list[str]:
+    """Top-level fields the tailoring pass actually edited."""
+    return [k for k in RESUME_SCHEMA["properties"] if base.get(k) != tailored.get(k)]
+
+
+# The tell-check sometimes reintroduces the very tells its prompt forbids.
+# Catch that in code and reject its patch rather than laundering AI tells.
+_TELL_WORDS = (
+    "—",
+    "leverage",
+    "spearhead",
+    "impact-driven",
+    "stakeholder",
+    "fast-paced",
+    "seamless",
+    "passionate",
+)
+# What the style guide bans is the CONSTRUCTION ("not just X but Y"), not the
+# bare words: "actual performance, not just the hype" is fine English.
+_TELL_CONSTRUCTION = re.compile(r"not\s+(?:just|only)\b[^.…;]*\bbut\b", re.IGNORECASE)
+# Flattening symptom seen live: the tell-check shreds a statement into a chain
+# of "I verb …" sentences. A human statement varies its openings; this doesn't.
+_I_OPENINGS = re.compile(r"(?:^|(?<=[.!?])\s)I\s")
+
+_STOPWORDS = frozenset(
+    """a an and are as at be but by for from has have i in is it its my of on or our
+    so that the their them this to we you your with not just only""".split()
+)
+
+
+def _content_words(value) -> set[str]:
+    """Lowercased content words of a resume field (lists/dicts traversed)."""
+    if isinstance(value, str):
+        return {w for w in re.findall(r"[a-z0-9'\-]+", value.lower()) if w not in _STOPWORDS}
+    if isinstance(value, (list, dict)):
+        items = value.values() if isinstance(value, dict) else value
+        out: set[str] = set()
+        for v in items:
+            out |= _content_words(v)
+        return out
+    return set()
+
+
+def _fact_recall(draft: dict, revised: dict, patch: dict) -> float:
+    """Share of the draft's content words that survived the tell-check patch.
+    Style-agnostic enforcement of 'rewrite, never remove': any flattening that
+    shreds claims lowers this, whatever its phrasing looks like."""
+    total = lost = 0
+    for key in patch:
+        if key not in draft:
+            continue
+        kept = _content_words(draft[key])
+        total += len(kept)
+        lost += len(kept - _content_words(revised.get(key)))
+    return 1.0 - (lost / total if total else 0.0)
+
+
+_MIN_FACT_RECALL = 0.9
+
+
+def _has_tells(value, skip_keys: tuple = ()) -> bool:
+    if isinstance(value, str):
+        low = value.lower()
+        if any(w in low for w in _TELL_WORDS) or _TELL_CONSTRUCTION.search(value):
+            return True
+        return len(_I_OPENINGS.findall(value)) >= 4
+    if isinstance(value, list):
+        return any(_has_tells(v, skip_keys) for v in value)
+    if isinstance(value, dict):
+        # Experience titles legitimately use an em dash as separator.
+        return any(_has_tells(v, skip_keys) for k, v in value.items() if k not in skip_keys)
+    return False
+
+
+def _changed_entry_titles(base: dict, tailored: dict) -> list[str]:
+    """Titles of experience entries that differ between two resume dicts."""
+
+    def by_title(resume: dict) -> dict:
+        return {
+            e.get("title", ""): json.dumps(e, sort_keys=True, ensure_ascii=False)
+            for e in resume.get("experiences", [])
+            if isinstance(e, dict)
+        }
+
+    b = by_title(base)
+    return [title for title, blob in by_title(tailored).items() if b.get(title) != blob]
+
+
+def _tellcheck_schema(changed: list[str], base: dict, tailored: dict) -> dict:
+    """Schema for the tell-check patch: only the changed fields; for experiences,
+    only the entries that actually differ (enforced via title enum)."""
+    props = {k: RESUME_SCHEMA["properties"][k] for k in changed if k not in ("name", "contact")}
+    if "experiences" in props:
+        titles = _changed_entry_titles(base, tailored)
+        if not titles:
+            del props["experiences"]
+        else:
+            item = dict(RESUME_SCHEMA["properties"]["experiences"]["items"])
+            item["properties"] = {**item["properties"], "title": {"enum": titles}}
+            props["experiences"] = {"type": "array", "items": item}
+    return {
+        "type": "object",
+        "properties": props,
+        "required": list(props),
+        "additionalProperties": False,
+    }
+
+
+def _tellcheck(base: dict, tailored: dict, changed: list[str]) -> dict | None:
+    """Strip AI tells from the edited fields; returns None if the pass fails."""
+    print("   Checking the edits for AI tells...")
+    try:
+        response = _get_client().messages.create(
+            model=llm.generation_model("claude-sonnet-4-6"),
+            max_tokens=8192,
+            thinking=llm.tellcheck_thinking(),
+            system=_TELLCHECK_SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Original resume (JSON):\n"
+                        + json.dumps(base, indent=2, ensure_ascii=False)
+                        + "\n\nTailored resume (JSON):\n"
+                        + json.dumps(tailored, indent=2, ensure_ascii=False)
+                        + "\n\nFields the tailor changed: "
+                        + ", ".join(changed)
+                        + "\n\nReturn the tell-checked patch: only these fields."
+                    ),
+                }
+            ],
+            output_config={
+                "format": {
+                    "type": "json_schema",
+                    "schema": _tellcheck_schema(changed, base, tailored),
+                }
+            },
+        )
+        if response.stop_reason == "max_tokens":
+            return None
+        text = next(b.text for b in response.content if b.type == "text")
+        patch = json.loads(text)
+        if any(_has_tells(v, skip_keys=("title", "subtitle")) for v in patch.values()):
+            print("   Tell-check reintroduced banned phrasing; keeping the tailored draft.")
+            return None
+        revised = _apply_patch(tailored, patch)
+        recall = _fact_recall(tailored, revised, patch)
+        if recall < _MIN_FACT_RECALL:
+            print(
+                f"   Tell-check dropped {100 - recall * 100:.0f}% of the draft's wording;"
+                " keeping the tailored draft."
+            )
+            return None
+    except Exception as e:
+        print(f"   Tell-check failed ({e}); using the tailored draft as-is.")
+        return None
+    # The tell-check must not silently re-touch fields the tailor left alone.
+    for key, value in base.items():
+        if key not in changed:
+            revised[key] = value
+    return revised
 
 
 # ---------------------------------------------------------------------------

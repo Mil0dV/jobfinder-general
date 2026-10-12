@@ -6,6 +6,12 @@ and this CLI/TUI share one set of jobs and swipe decisions:
     jobs/<key>          <- jobs.csv rows            (content-addressed, merge)
     decisions/<key>     <- job_decisions.json       (last swipe wins, by ts)
     descriptions/<key>  <- job_descriptions.json    (pushed on fetch, pulled on miss)
+    replies/<sha1 msgid> -> job_replies.json        (pull only; the Android app writes)
+
+The replies collection is the Android app's inbox scan: it reads Gmail over IMAP,
+classifies what companies wrote back, and publishes the verdicts. This side only
+reads them, to show the interview banner in the TUI and shell — no mail
+credentials live here.
 
 <key> is sha1 of the job's normalized URL (or "company|title" when there is no
 URL); every record carries its original key in a "key"/"url" field for the
@@ -33,15 +39,25 @@ load_dotenv()
 
 _project_root = os.path.dirname(os.path.abspath(__file__))
 DECISIONS_FILE = os.path.join(_project_root, "job_decisions.json")
+REPLIES_FILE = os.path.join(_project_root, "job_replies.json")
 
 _TIMEOUT = 15
 _BATCH = 400  # Firestore commit limit is 500 writes
 
 
 def norm_key(url: str, company: str = "", title: str = "") -> str:
-    """The job's identity: normalized URL, or company|title without one."""
+    """The job's cross-device identity — the id behind every Firestore doc and
+    every swipe decision. Company|title-first (lowercased) so the SAME role found
+    by two sources under two URLs is ONE job on every device: identity, dedup key
+    and decision key are all this string, which is what keeps decisions convergent
+    across devices. Falls back to the normalized URL only when there is no real
+    company+title (company missing or "Unknown")."""
+    c = (company or "").strip().lower()
+    t = (title or "").strip().lower()
+    if c and c != "unknown" and t:
+        return f"{c}|{t}"
     u = (url or "").split("?")[0].strip().rstrip("/")
-    return u or f"{company}|{title}"
+    return u or (f"{c}|{t}" if c and t else "")
 
 
 def job_key(job: dict) -> str:
@@ -262,6 +278,15 @@ class FirebaseSync:
                 out[local_key] = record
         return out
 
+    def pull_replies(self) -> dict:
+        """Classified inbox replies as {doc_id: record}. Read-only on this side —
+        the Android app's inbox scan is the only writer."""
+        out = {}
+        for doc_id, record in self._list_all("replies"):
+            record.pop("id", None)
+            out[doc_id] = record
+        return out
+
     def get_description(self, url: str) -> str | None:
         k = hashlib.sha1(norm_key(url).encode("utf-8")).hexdigest()
         try:
@@ -370,18 +395,57 @@ def _save_local_decisions(decisions: dict):
         json.dump(decisions, f, indent=2, ensure_ascii=False)
 
 
+def load_replies() -> dict:
+    """Locally cached inbox replies as {doc_id: record}, newest first.
+
+    Populated by sync_down from the Android app's scan. Empty when sync is off or
+    the phone hasn't scanned yet — every caller treats that as "nothing to show".
+    """
+    try:
+        with open(REPLIES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def replies_sorted(status: str = "") -> list:
+    """Reply records, newest first, optionally filtered to one status."""
+    records = [r for r in load_replies().values() if not status or r.get("status") == status]
+    return sorted(records, key=lambda r: str(r.get("ts", "")), reverse=True)
+
+
+def invites_waiting() -> int:
+    """How many replies invited the candidate to talk."""
+    return len(replies_sorted("invited"))
+
+
+def actions_waiting() -> int:
+    """Applications parked until the candidate does something — screening questions,
+    an assessment, a re-uploaded CV. Not an invitation, but ignoring one kills the
+    application just as dead, so it carries the same weight in the badge."""
+    return len(replies_sorted("action_needed"))
+
+
+def waiting_count() -> int:
+    """Everything that needs the candidate — the badge count."""
+    return invites_waiting() + actions_waiting()
+
+
 def sync_down(verbose: bool = False) -> bool:
     """Merge remote decisions and jobs into the local files. Returns success."""
     sync = get_sync()
     if not sync:
         return False
     try:
-        # Decisions: union, later "ts" wins on conflict.
+        # Decisions: union, later "ts" wins on conflict. Canonicalize the incoming
+        # key (company|title, URL fallback) so a raw/legacy remote key never enters
+        # local state — otherwise it would just get pushed back up on the next sync.
         local = _load_local_decisions()
         changed = False
         for key, record in sync.pull_decisions().items():
-            if key not in local or str(record.get("ts", "")) > str(local[key].get("ts", "")):
-                local[key] = record
+            ck = norm_key(key, record.get("company", ""), record.get("title", "")) or key
+            if ck not in local or str(record.get("ts", "")) > str(local[ck].get("ts", "")):
+                local[ck] = record
                 changed = True
         if changed:
             _save_local_decisions(local)
@@ -391,10 +455,21 @@ def sync_down(verbose: bool = False) -> bool:
 
         remote_jobs = sync.pull_jobs()
         result = save_jobs(remote_jobs, _push=False) if remote_jobs else {"added": 0}
+
+        # Replies: a straight mirror of the phone's scan — it owns the collection,
+        # so there is nothing to merge and nothing to push back.
+        replies = sync.pull_replies()
+        if replies:
+            with open(REPLIES_FILE, "w", encoding="utf-8") as f:
+                json.dump(replies, f, indent=2, ensure_ascii=False)
+
         if verbose:
+            invites = sum(1 for r in replies.values() if r.get("status") == "invited")
+            todo = sum(1 for r in replies.values() if r.get("status") == "action_needed")
             print(
                 f"   Sync: pulled {len(remote_jobs)} jobs "
-                f"({result.get('added', 0)} new), decisions merged"
+                f"({result.get('added', 0)} new), decisions merged, "
+                f"{len(replies)} replies ({invites} invite(s), {todo} to finish)"
             )
         return True
     except Exception as e:

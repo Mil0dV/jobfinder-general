@@ -18,6 +18,15 @@ OPENROUTER_MODEL (default moonshotai/kimi-k3); everything else runs on
 OPENROUTER_FAST_MODEL (default deepseek/deepseek-v4-flash). 429s and 5xx
 responses are retried with Retry-After-aware exponential backoff.
 
+Generation-tier preference: when MARVIN_KEY is set and the local llama rig
+answers at import (GET MARVIN_BASE_URL/models), cover letters and resume
+tailoring request llm.generation_model(...) instead, which resolves to
+the model llama-swap has loaded on the rig (http://marvin:8080/v1): MARVIN_PREFERRED_MODEL
+(default qwen3.8-27b) if it is loaded, else MARVIN_MODEL (default gandalf); setting
+MARVIN_MODEL explicitly in .env pins it and skips the check. No key, rig down, or LLM_PROVIDER=anthropic: the normal tiers
+are used unchanged. A marvin call that hits a network error mid-flight falls
+back to the configured provider once.
+
 Exception classes (``llm.AuthError``, ``llm.NetworkError``, ``llm.APIError``)
 alias the Anthropic SDK classes in anthropic mode, so except-clauses work
 identically under both providers.
@@ -55,6 +64,67 @@ if _env_provider in ("anthropic", "openrouter"):
     PROVIDER = _env_provider
 else:
     PROVIDER = "openrouter" if os.getenv("OPENROUTER_API_KEY") else "anthropic"
+
+# Marvin: the candidate's V100 llama rig (ik_llama.cpp). Preferred backend for
+# generation-tier calls (cover letters, resume tailoring) when reachable.
+MARVIN_BASE_URL = os.getenv("MARVIN_BASE_URL", "http://marvin:8080/v1").rstrip("/")
+# llama-swap serves several models and loads one on demand (a swap stalls the call), so
+# prefer whichever is already loaded: MARVIN_PREFERRED_MODEL if up, else MARVIN_MODEL.
+_marvin_pinned = bool(os.getenv("MARVIN_MODEL"))
+MARVIN_MODEL = os.getenv("MARVIN_MODEL", "gandalf")
+MARVIN_PREFERRED_MODEL = os.getenv("MARVIN_PREFERRED_MODEL", "qwen3.8-27b")
+MARVIN_THINKING = (os.getenv("MARVIN_THINKING") or "low").strip().lower()
+MARVIN_TELLCHECK_THINKING = (os.getenv("MARVIN_TELLCHECK_THINKING") or "off").strip().lower()
+MARVIN_KEY = os.getenv("MARVIN_KEY", "")
+
+
+def marvin_loaded_models() -> set[str] | None:
+    """Ids llama-swap reports as loaded (aliases included), or None if the rig is
+    unreachable / not llama-swap-shaped. GET /v1/models carries status.value."""
+    if not MARVIN_KEY or PROVIDER == "anthropic":
+        return None
+    try:
+        r = requests.get(
+            f"{MARVIN_BASE_URL}/models",
+            headers={"Authorization": f"Bearer {MARVIN_KEY}"},
+            timeout=3,
+        )
+        if r.status_code != 200:
+            return None
+        return {
+            m["id"]
+            for m in r.json().get("data", [])
+            if (m.get("status") or {}).get("value") == "loaded"
+        }
+    except (requests.RequestException, ValueError):
+        return None
+
+
+_marvin_loaded = marvin_loaded_models()
+MARVIN_READY = _marvin_loaded is not None
+if MARVIN_READY and not _marvin_pinned and MARVIN_PREFERRED_MODEL in _marvin_loaded:
+    MARVIN_MODEL = MARVIN_PREFERRED_MODEL
+
+
+def generation_model(fallback: str) -> str:
+    """Model generation-tier call sites should request: marvin when it is up."""
+    return MARVIN_MODEL if MARVIN_READY else fallback
+
+
+def generation_thinking() -> str | None:
+    """Thinking setting for generation-tier calls; None keeps provider defaults.
+    On the rig: "off" maps to enable_thinking=false, anything else maps to the
+    chat template's reasoning_effort (low|medium|high). Measured on flash-next:
+    low and medium consume nearly the same thinking; high costs 3x for no gain.
+    Tune with MARVIN_THINKING (default low)."""
+    return MARVIN_THINKING if MARVIN_READY else None
+
+
+def tellcheck_thinking() -> str | None:
+    """Thinking for mechanical tell-check / revision passes. Unlike drafting,
+    flattening prose gains nothing from reasoning, so the rig defaults to off.
+    Tune with MARVIN_TELLCHECK_THINKING (default off)."""
+    return MARVIN_TELLCHECK_THINKING if MARVIN_READY else None
 
 
 if PROVIDER == "anthropic":
@@ -174,20 +244,59 @@ class _OpenRouterMessages:
     def __init__(self, key: str):
         self._key = key
 
-    def _headers(self) -> dict:
-        return {
-            "Authorization": f"Bearer {self._key}",
+    def _headers(self, backend: dict) -> dict:
+        headers = {
+            "Authorization": f"Bearer {backend['key']}",
             "Content-Type": "application/json",
-            "X-Title": "jobfinder",
+        }
+        if backend["name"] == "openrouter":
+            headers["X-Title"] = "jobfinder"
+        return headers
+
+    def _backend_for(self, model, allow_marvin: bool = True) -> dict:
+        if allow_marvin and MARVIN_READY and (model or "") == MARVIN_MODEL:
+            return {
+                "url": f"{MARVIN_BASE_URL}/chat/completions",
+                "key": MARVIN_KEY,
+                "model": MARVIN_MODEL,
+                "name": "marvin",
+                "requested": model,
+            }
+        # A generation call that asked for MARVIN_MODEL must fall back to the main
+        # OpenRouter model; _map_model would send it to the fast tier, since the
+        # rig model name carries no tier hint.
+        if (model or "") == MARVIN_MODEL:
+            fallback_model = OPENROUTER_MODEL
+        else:
+            fallback_model = _map_model(model)
+        return {
+            "url": OPENROUTER_URL,
+            "key": self._key,
+            "model": fallback_model,
+            "name": "openrouter",
+            "requested": model,
         }
 
-    def _payload(self, *, model, max_tokens, messages, system=None, tools=None, output_config=None):
-        # Reasoning models (like Kimi K3) spend hidden thinking tokens out of
-        # max_tokens; the small per-call budgets tuned for Claude can leave zero
-        # room for the actual answer. Give every call generous headroom.
+    def _payload(
+        self,
+        *,
+        backend,
+        max_tokens,
+        messages,
+        system=None,
+        tools=None,
+        output_config=None,
+        thinking=None,
+    ):
+        # Reasoning models (Kimi K3, Flash-Next) spend hidden thinking tokens
+        # out of max_tokens; the small per-call budgets tuned for Claude can
+        # leave zero room for the actual answer. The rig's Flash-Next needs a
+        # lot of headroom: its reasoning easily eats 8k+ tokens on resume-sized
+        # prompts, then the answer never starts.
+        headroom = 32768 if backend["name"] == "marvin" else 8192
         payload = {
-            "model": _map_model(model),
-            "max_tokens": max(max_tokens, 8192),
+            "model": backend["model"],
+            "max_tokens": max(max_tokens, headroom),
             "messages": _to_openai_messages(system, messages),
         }
         if tools:
@@ -208,23 +317,29 @@ class _OpenRouterMessages:
                 "type": "json_schema",
                 "json_schema": {"name": "output", "strict": True, "schema": fmt["schema"]},
             }
+        if backend["name"] == "marvin" and thinking:
+            # ik_llama chat-template knobs (same ones pi's v100 provider config uses).
+            if thinking == "off":
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+            else:
+                payload["chat_template_kwargs"] = {"reasoning_effort": thinking}
         return payload
 
-    def _post(self, payload: dict, stream: bool = False) -> requests.Response:
+    def _post(self, payload: dict, backend: dict, stream: bool = False) -> requests.Response:
         last_error = ""
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 r = requests.post(
-                    OPENROUTER_URL,
-                    headers=self._headers(),
+                    backend["url"],
+                    headers=self._headers(backend),
                     json=payload,
-                    timeout=300,
+                    timeout=600,
                     stream=stream,
                 )
             except (requests.ConnectionError, requests.Timeout) as e:
-                raise NetworkError(f"Could not reach OpenRouter: {e}") from e
+                raise NetworkError(f"Could not reach {backend['name']}: {e}") from e
             if r.status_code == 401:
-                raise AuthError("Invalid OPENROUTER_API_KEY")
+                raise AuthError(f"Invalid {backend['name']} API key")
             if r.status_code == 429 or r.status_code >= 500:
                 last_error = r.text[:500]
                 if attempt < _MAX_RETRIES:
@@ -241,10 +356,10 @@ class _OpenRouterMessages:
                 # If structured output isn't supported for this model, retry without it.
                 if "response_format" in payload:
                     retry = {k: v for k, v in payload.items() if k != "response_format"}
-                    return self._post(retry, stream=stream)
-                raise APIError(f"OpenRouter error {r.status_code}: {r.text[:500]}")
+                    return self._post(retry, backend, stream=stream)
+                raise APIError(f"{backend['name']} error {r.status_code}: {r.text[:500]}")
             return r
-        raise APIError(f"OpenRouter error after {_MAX_RETRIES + 1} attempts: {last_error}")
+        raise APIError(f"{backend['name']} error after {_MAX_RETRIES + 1} attempts: {last_error}")
 
     def create(
         self,
@@ -258,18 +373,32 @@ class _OpenRouterMessages:
         thinking=None,
         **_ignored,
     ):
-        payload = self._payload(
-            model=model,
-            max_tokens=max_tokens,
-            messages=messages,
-            system=system,
-            tools=tools,
-            output_config=output_config,
-        )
-        data = self._post(payload).json()
+        backend = self._backend_for(model)
+
+        def _attempt(backend: dict) -> dict:
+            payload = self._payload(
+                backend=backend,
+                max_tokens=max_tokens,
+                messages=messages,
+                system=system,
+                tools=tools,
+                output_config=output_config,
+                thinking=thinking,
+            )
+            return self._post(payload, backend).json()
+
+        try:
+            data = _attempt(backend)
+        except NetworkError:
+            if backend["name"] != "marvin":
+                raise
+            print("   (marvin unreachable; falling back to the configured model)")
+            backend = self._backend_for(model, allow_marvin=False)
+            data = _attempt(backend)
         if "choices" not in data:
-            raise APIError(f"OpenRouter error: {json.dumps(data)[:500]}")
+            raise APIError(f"{backend['name']} error: {json.dumps(data)[:500]}")
         msg = data["choices"][0]["message"]
+        finish = data["choices"][0].get("finish_reason")
         blocks = []
         text = msg.get("content") or ""
         if output_config:
@@ -286,29 +415,63 @@ class _OpenRouterMessages:
                     type="tool_use", id=tc["id"], name=tc["function"]["name"], input=args
                 )
             )
-        stop_reason = "tool_use" if msg.get("tool_calls") else "end_turn"
-        return SimpleNamespace(content=blocks, stop_reason=stop_reason)
+        if not blocks:
+            # e.g. a reasoning model that burned max_tokens on hidden thinking.
+            raise APIError(
+                f"{backend['name']} returned no visible output (finish_reason={finish})."
+            )
+        stop_reason = (
+            "tool_use"
+            if msg.get("tool_calls")
+            else ("max_tokens" if finish == "length" else "end_turn")
+        )
+        return SimpleNamespace(
+            content=blocks, stop_reason=stop_reason, usage=data.get("usage") or {}
+        )
 
     def stream(
-        self, *, model=None, max_tokens=1024, messages=None, system=None, thinking=None, **_ignored
+        self,
+        *,
+        model=None,
+        max_tokens=1024,
+        messages=None,
+        system=None,
+        thinking=None,
+        **_ignored,
     ):
+        backend = self._backend_for(model)
         payload = self._payload(
-            model=model, max_tokens=max_tokens, messages=messages, system=system
+            backend=backend,
+            max_tokens=max_tokens,
+            messages=messages,
+            system=system,
+            thinking=thinking,
         )
         payload["stream"] = True
-        return _OpenRouterStream(self, payload)
+        return _OpenRouterStream(self, payload, backend)
 
 
 class _OpenRouterStream:
     """Context manager mimicking anthropic's messages.stream()."""
 
-    def __init__(self, messages_api: _OpenRouterMessages, payload: dict):
+    def __init__(self, messages_api: _OpenRouterMessages, payload: dict, backend: dict):
         self._api = messages_api
         self._payload = payload
+        self._backend = backend
         self._response = None
 
     def __enter__(self):
-        self._response = self._api._post(self._payload, stream=True)
+        try:
+            self._response = self._api._post(self._payload, self._backend, stream=True)
+        except NetworkError:
+            if self._backend["name"] != "marvin":
+                raise
+            print("   (marvin unreachable; falling back to the configured model)")
+            self._backend = self._api._backend_for(self._backend["requested"], allow_marvin=False)
+            self._payload["model"] = self._backend["model"]
+            self._response = self._api._post(self._payload, self._backend, stream=True)
+        # SSE has no charset header, so requests would decode as ISO-8859-1
+        self._response.encoding = "utf-8"
         return self
 
     def __exit__(self, *exc):

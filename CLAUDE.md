@@ -313,8 +313,10 @@ Defined in `.env` (see `.env.example`):
 - `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` / `OPENROUTER_FAST_MODEL` (openrouter mode)
 - `MARVIN_KEY` (optional — the local V100 llama rig, ik_llama.cpp). When set and the
   rig answers `GET $MARVIN_BASE_URL/models` at import, cover letters and resume tailoring
-  run on `MARVIN_MODEL` (default `flash-next-strata` @ `http://marvin:8085/v1`, the same
-  key/provider pi uses as `v100-ik`); no key or unreachable rig = the normal tier models.
+  run on whichever model llama-swap (`http://marvin:8080/v1`) has loaded: `MARVIN_PREFERRED_MODEL`
+  (default `qwen3.8-27b`) if `/v1/models` reports it `loaded`, else `MARVIN_MODEL` (default
+  `gandalf`); setting `MARVIN_MODEL` in `.env` pins it and skips the check. Resolved once at
+  import (a swap stalls the call, so we never trigger one for the preferred model); no key or unreachable rig = the normal tier models.
   A mid-call network error to marvin falls back to the configured provider once. Override
   with `MARVIN_BASE_URL` / `MARVIN_MODEL`.
 - `MARVIN_THINKING` (optional, default `low`) — rig chat-template knob for cover letters
