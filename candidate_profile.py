@@ -85,6 +85,7 @@ _DEFAULT_COUNTRY_TERMS = {
         "köln",
         "stuttgart",
         "leipzig",
+        "freiburg",
         "de",
     ],
     "switzerland": [

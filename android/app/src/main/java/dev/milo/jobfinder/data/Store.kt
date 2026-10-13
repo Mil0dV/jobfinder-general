@@ -95,14 +95,22 @@ class Store private constructor(private val dir: File) {
             .put("decision", if (liked) "yes" else "no")
             .put("title", job.title)
             .put("company", job.company)
-            .put("ts", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+            .put("ts", java.time.Instant.now().toString()) // UTC: cross-device comparable
         decisions.put(job.decisionKey, record)
         persistDecisions()
         return record
     }
 
     fun undecide(job: Job) {
-        decisions.remove(job.decisionKey)
+        // Write a tombstone instead of dropping the entry: a raw delete is
+        // invisible to the other devices' pulls, so the swipe resurrects on the
+        // next sync. A tombstone propagates; a later real decision overwrites it.
+        decisions.put(
+            job.decisionKey,
+            JSONObject()
+                .put("decision", "deleted")
+                .put("ts", java.time.Instant.now().toString()),
+        )
         persistDecisions()
     }
 
@@ -190,6 +198,16 @@ class Store private constructor(private val dir: File) {
             // re-enters local state (and thus never gets pushed back up).
             val key = canonicalKey(remoteKey, record)
             val mine = decisions.optJSONObject(key)
+            if (record.optString("decision") == "deleted") {
+                // Tombstone: a delete that must converge instead of resurrect.
+                // Newer-or-equal tombstones kill the local record; a later real
+                // decision (pushed up by decide()) overwrites the tombstone.
+                if (mine != null && record.optString("ts") >= mine.optString("ts")) {
+                    decisions.remove(key)
+                    mergedDecisions++
+                }
+                continue
+            }
             if (mine == null || record.optString("ts") > mine.optString("ts")) {
                 decisions.put(key, record)
                 mergedDecisions++

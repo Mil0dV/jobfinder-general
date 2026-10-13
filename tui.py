@@ -99,7 +99,11 @@ def job_key(job) -> str:
 
 
 def load_decisions() -> dict:
-    return _load_json(DECISIONS_FILE, {})
+    # Tombstones (delete markers that make cross-device removals converge) are
+    # sync plumbing — the UI and shell only ever see real swipes.
+    from sync import _filter_tombstones
+
+    return _filter_tombstones(_load_json(DECISIONS_FILE, {}))
 
 
 def _push_decision(key, record):
@@ -120,17 +124,20 @@ def save_decisions(decisions: dict):
 
 
 def record_decision(decisions: dict, key: str, record) -> None:
-    """Read-modify-write one decision against the on-disk file (record=None removes
-    it), then mirror the merged result into the live dict. Re-reading first keeps a
-    parallel TUI session's swipes from being clobbered by this session's stale copy."""
-    merged = load_decisions()
+    """Read-modify-write one decision against the on-disk file (record=None writes
+    a tombstone so the delete propagates to other devices), then mirror the merged
+    result into the live dict. Re-reading first keeps a parallel TUI session's
+    swipes from being clobbered by this session's stale copy."""
+    merged = _load_json(DECISIONS_FILE, {})  # unfiltered: tombstones must survive the rewrite
+    from sync import tombstone, _filter_tombstones
+
     if record is None:
-        merged.pop(key, None)
+        merged[key] = tombstone()
     else:
         merged[key] = record
     save_decisions(merged)
     decisions.clear()
-    decisions.update(merged)
+    decisions.update(_filter_tombstones(merged))
 
 
 _decisions_mtime = None
@@ -692,7 +699,7 @@ def swipe_screen(term, deck, decisions):
                 "decision": choice,
                 "title": job.get("title", ""),
                 "company": job.get("company", ""),
-                "ts": time.strftime("%Y-%m-%d %H:%M"),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),  # UTC: cross-device comparable
             },
         )
         _push_decision(key, decisions[key])

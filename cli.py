@@ -421,7 +421,7 @@ def _cmd_applied(args, ctx):
         "decision": "applied",
         "title": title,
         "company": company,
-        "ts": time.strftime("%Y-%m-%d %H:%M"),
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),  # UTC: cross-device comparable
     }
     save_decisions(decisions)
     _push_decision(key, decisions[key])
