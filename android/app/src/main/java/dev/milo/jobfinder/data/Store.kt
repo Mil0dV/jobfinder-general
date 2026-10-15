@@ -87,7 +87,11 @@ class Store private constructor(private val dir: File) {
         return changed
     }
 
-    fun isDecided(job: Job): Boolean = decisions.has(job.decisionKey)
+    // A "deleted" tombstone (undone swipe) is sync plumbing, not a decision: the job
+    // must come back to the deck.
+    fun isDecided(job: Job): Boolean =
+        decisions.optJSONObject(job.decisionKey)?.optString("decision")
+            ?.let { it.isNotEmpty() && it != "deleted" } ?: false
 
     /** Record a swipe; returns the decision record (for the sync push). */
     fun decide(job: Job, liked: Boolean): JSONObject {
