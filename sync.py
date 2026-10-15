@@ -66,6 +66,68 @@ def job_key(job: dict) -> str:
     return hashlib.sha1(ident.encode("utf-8")).hexdigest()
 
 
+def tombstone(ts: str = "") -> dict:
+    """Delete marker carried in the decisions store (instead of dropping the entry).
+
+    Deletes used to be raw Firestore deletes: sync_down never saw them, so an
+    undone swipe on one device resurrected on the next pull. A tombstone is a
+    decision record every device can see and honour; a later real decision
+    simply overwrites it.
+    """
+    return {
+        "decision": "deleted",
+        "ts": ts or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def is_tombstone(record) -> bool:
+    return isinstance(record, dict) and record.get("decision") == "deleted"
+
+
+def _filter_tombstones(decisions: dict) -> dict:
+    """Decisions visible to the UI/CLI: tombstones are sync plumbing, not swipes."""
+    return {k: v for k, v in decisions.items() if not is_tombstone(v)}
+
+
+def _ts_rank(ts) -> str:
+    """Normalize a decision timestamp for cross-device comparison.
+
+    Old records carry minute-granularity *local* strings ("2026-10-12 18:40")
+    written with each device's own clock — comparing them lexicographically
+    across timezones inverts the ordering. New records are ISO-8601 UTC
+    ("2026-10-12T18:40:00Z"). Mapping the legacy format to the same UTC shape
+    (assuming it was written in the laptop's timezone, TIMEZONE) makes old and
+    new records sort consistently.
+    """
+    s = str(ts or "").strip()
+    if not s:
+        return ""
+    from datetime import datetime
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        from candidate_profile import TIMEZONE
+    except Exception:
+        ZoneInfo, TIMEZONE = None, None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+        if fmt == "%Y-%m-%dT%H:%M:%SZ":
+            return s  # already canonical UTC
+        if ZoneInfo is not None and TIMEZONE is not None:
+            try:
+                dt = dt.replace(tzinfo=ZoneInfo(TIMEZONE)).astimezone(
+                    datetime.now(ZoneInfo("UTC")).tzinfo
+                )
+            except Exception:
+                pass
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return s  # unrecognized format: compare as-is
+
+
 def _enc_fields(record: dict) -> dict:
     """Encode a flat dict into Firestore REST typed fields."""
     fields = {}
@@ -221,12 +283,21 @@ class FirebaseSync:
                 }
             )
             desc = job.get("_desc")
-            if desc:
+            if desc and job.get("url"):
+                # Descriptions are keyed by normalized URL (page content is
+                # per-URL) — the same key getDescription/push_description use and
+                # the Android app writes with (Sync.kt sha1(normalizeUrl(url))).
+                # The old identity key (sha1(company|title)) made descriptions
+                # pushed with a job unreachable by every reader, and orphaned a
+                # dupe whenever the same role appeared under two URLs.
                 writes.append(
                     {
                         "update": {
-                            "name": self._doc_name("descriptions", k),
-                            "fields": _enc_fields({"url": job.get("url", ""), "description": desc}),
+                            "name": self._doc_name(
+                                "descriptions",
+                                hashlib.sha1(norm_key(job["url"]).encode("utf-8")).hexdigest(),
+                            ),
+                            "fields": _enc_fields({"url": job["url"], "description": desc}),
                         }
                     }
                 )
@@ -239,21 +310,24 @@ class FirebaseSync:
         return {doc_id for doc_id, _ in self._list_all("jobs", key_only=True)}
 
     def push_decision(self, local_key: str, record: dict | None):
-        """Write (or, on undo, delete) one swipe decision."""
+        """Write one swipe decision; on undo write a tombstone instead of deleting.
+
+        A raw DELETE was invisible to sync_down, so undone swipes resurrected on
+        the next pull from any device that still had the old record.
+        """
         k = hashlib.sha1(local_key.encode("utf-8")).hexdigest()
         if record is None:
-            self._request("DELETE", f"decisions/{k}")
-        else:
-            self._commit(
-                [
-                    {
-                        "update": {
-                            "name": self._doc_name("decisions", k),
-                            "fields": _enc_fields({**record, "key": local_key}),
-                        }
+            record = tombstone()
+        self._commit(
+            [
+                {
+                    "update": {
+                        "name": self._doc_name("decisions", k),
+                        "fields": _enc_fields({**record, "key": local_key}),
                     }
-                ]
-            )
+                }
+            ]
+        )
 
     def push_decisions(self, decisions: dict):
         writes = [
@@ -437,14 +511,22 @@ def sync_down(verbose: bool = False) -> bool:
     if not sync:
         return False
     try:
-        # Decisions: union, later "ts" wins on conflict. Canonicalize the incoming
-        # key (company|title, URL fallback) so a raw/legacy remote key never enters
+        # Decisions: union, later "ts" wins on conflict (compared as UTC — see
+        # _ts_rank). Deletes travel as tombstones: a tombstone newer than a
+        # record kills it, and on an exact tie the delete wins so removals
+        # converge instead of resurrecting. Canonicalize the incoming key
+        # (company|title, URL fallback) so a raw/legacy remote key never enters
         # local state — otherwise it would just get pushed back up on the next sync.
         local = _load_local_decisions()
         changed = False
         for key, record in sync.pull_decisions().items():
             ck = norm_key(key, record.get("company", ""), record.get("title", "")) or key
-            if ck not in local or str(record.get("ts", "")) > str(local[ck].get("ts", "")):
+            if ck not in local:
+                local[ck] = record
+                changed = True
+                continue
+            remote_ts, local_ts = _ts_rank(record.get("ts")), _ts_rank(local[ck].get("ts"))
+            if remote_ts > local_ts or (remote_ts == local_ts and is_tombstone(record)):
                 local[ck] = record
                 changed = True
         if changed:

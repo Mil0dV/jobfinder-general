@@ -120,6 +120,12 @@ _ONSITE_HINTS = [
 ]
 
 
+# Germany is in the search net but not a work location per se: the candidate lives
+# in the countryside, so a German job only counts when it's fully remote, or hybrid
+# based in Freiburg (the one city within plausible reach). Pure on-site DE roles drop.
+_FREIBURG_PATTERN = re.compile(r"\b(freiburg|freiburg im breisgau|freiburg i\.?br\.?)\b", re.I)
+
+
 def _preferred_location_verdict(job: dict) -> tuple[bool, str]:
     """Apply the PREFERRED_LOCATION policy; returns (keep, drop_reason)."""
     loc = (job.get("location") or "").lower()
@@ -131,6 +137,13 @@ def _preferred_location_verdict(job: dict) -> tuple[bool, str]:
         loc
     ) or _CH_CANTON_PATTERN.search(loc):
         return True, ""  # CH: on-site, hybrid, or remote all fine
+    de_terms = list(COUNTRY_TERMS.get("germany", ["germany", "deutschland"]))
+    if _term_pattern(de_terms).search(loc):
+        if "remote" in blob or any(h in blob for h in REMOTE_HINTS):
+            return True, ""  # DE remote: fine from anywhere
+        if ("hybrid" in blob or "hybride" in blob) and _FREIBURG_PATTERN.search(loc):
+            return True, ""  # DE hybrid: only Freiburg is commutable
+        return False, "Germany outside Freiburg / not remote (countryside commute)"
     nl_terms = list(COUNTRY_TERMS.get("netherlands", ["netherlands"])) + _NL_EXTRA_TERMS
     if _term_pattern(nl_terms).search(loc):
         # NL: benefit of the doubt — drop only on an explicit on-site-only signal
@@ -713,9 +726,15 @@ def search_climatebase(query: str, location: str = "") -> list:
     facet_filters = []
     loc = (location or "").lower()
     if _is_preferred_location(location):
-        # OR group: CH or NL jobs, or remote anywhere
+        # OR group: CH or NL jobs, German jobs (the verdict policy then keeps only
+        # DE-remote or Freiburg-hybrid), or remote anywhere
         facet_filters = [
-            ["countries:Switzerland", "countries:Netherlands", "remote_preferences:Remote"]
+            [
+                "countries:Switzerland",
+                "countries:Netherlands",
+                "countries:Germany",
+                "remote_preferences:Remote",
+            ]
         ]
     else:
         for term, country in CLIMATEBASE_COUNTRIES.items():
@@ -1348,6 +1367,96 @@ def _get_anthropic_client():
     return _anthropic_client
 
 
+def _dedup_and_filter_stale(jobs: list, seen_keys: set, max_age_days: int) -> list:
+    """Drop stale postings first, then dedup by cross-device identity.
+
+    Order matters: the old code registered the dedup key *before* the age check,
+    so an ancient variant of a job poisoned the key and a fresh repost from a
+    better source vanished entirely. Same-key variants now resolve to the freshest
+    one (dated beats undated; among dated, newest posted_date wins).
+    """
+    def _age(job):
+        return _job_age_days(job.get("posted_date", ""))
+
+    from sync import norm_key
+
+    fresh = [j for j in jobs if (a := _age(j)) is None or a <= max_age_days]
+    by_key: dict[str, dict] = {}
+    kept = []
+    for job in fresh:
+        key = norm_key(job.get("url", ""), job.get("company", ""), job.get("title", ""))
+        if not key:  # nothing to identify the job by — never dedup pasted/unknown jobs
+            kept.append(job)
+            continue
+        if key in seen_keys:
+            continue
+        if (prev := by_key.get(key)) is not None:
+            pa, a = _age(prev), _age(job)
+            if pa is None or (a is not None and a < pa):
+                by_key[key] = job
+        else:
+            by_key[key] = job
+    kept.extend(by_key.values())
+    seen_keys.update(by_key)
+    return kept
+
+
+def _search_dedupe(all_jobs: list, seen_keys: set, max_age_days: int) -> list:
+    return _dedup_and_filter_stale(all_jobs, seen_keys, max_age_days)
+
+
+def _salvage_evaluations_json(text: str) -> dict | None:
+    """Recover the complete evaluations from a truncated validation JSON reply.
+
+    A batch cut off mid-write fails json.loads outright; the old fallback then
+    scored the *whole* batch with priors (fit=3 / climate=4 on climate boards —
+    jobs that pass the gates unvalidated). This trims to the last complete
+    evaluation object and closes the structure, so only the genuinely missing
+    tail falls back.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    last_close = -1  # position just past the last complete evaluation object
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])  # complete, not truncated
+                except json.JSONDecodeError:
+                    return None
+            if depth == 1:  # closed one evaluation inside evaluations[]
+                # (outer object = depth 1 while open, each evaluation = depth 2)
+                last_close = i + 1
+    if last_close <= start:
+        return None
+    # Truncated (possibly mid-string): keep everything up to the last complete
+    # evaluation and close evaluations[] + the outer object.
+    try:
+        data = json.loads(text[start:last_close] + "]}")
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("evaluations"), list):
+        return data
+    return None
+
+
 def _validation_json(prompt: str) -> dict | None:
     """Score a validation batch via the LLM with a JSON-schema-constrained response."""
     import llm
@@ -1357,16 +1466,26 @@ def _validation_json(prompt: str) -> dict | None:
     try:
         response = _get_anthropic_client().messages.create(
             model=VALIDATION_MODEL,
-            max_tokens=2000,
+            max_tokens=4000,  # 15 evaluations + reasons ≈ 1.5-2.5k; 2000 truncated whole batches
             output_config={"format": {"type": "json_schema", "schema": _VALIDATION_SCHEMA}},
             messages=[{"role": "user", "content": prompt}],
         )
         text = next(b.text for b in response.content if b.type == "text")
-        data = json.loads(text)
-        return {str(ev["id"]): ev for ev in data.get("evaluations", [])}
     except Exception as e:
         print(f"   Validation error ({VALIDATION_MODEL}): {e}")
         return None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = _salvage_evaluations_json(text)
+        if data is None:
+            print(f"   Validation reply unparseable ({VALIDATION_MODEL}) — batch left unvalidated")
+            return None
+        print(
+            f"   Validation reply truncated — salvaged {len(data.get('evaluations', []))} "
+            f"complete evaluation(s), only the missing tail falls back"
+        )
+    return {str(ev["id"]): ev for ev in data.get("evaluations", []) if isinstance(ev, dict) and "id" in ev}
 
 
 def validate_jobs_batch(jobs: list, search_query: str) -> list:
@@ -1670,20 +1789,13 @@ def search_jobs(
 
     # Dedupe by cross-device identity (company|title, URL fallback) — same key
     # save_jobs and the sync layer use, so one search never yields two rows that
-    # would later collapse to one job.
+    # would later collapse to one job. Stale postings are dropped *before* keys
+    # are registered (a poisoned key used to swallow fresh reposts), and same-key
+    # variants resolve to the freshest one.
     from sync import norm_key
 
-    seen_keys, unique_jobs = set(), []
-    for job in all_jobs:
-        key = norm_key(job.get("url", ""), job.get("company", ""), job.get("title", ""))
-        if key and key in seen_keys:
-            continue
-        if key:
-            seen_keys.add(key)
-        age = _job_age_days(job.get("posted_date"))
-        if age is not None and age > max_age_days:
-            continue
-        unique_jobs.append(job)
+    seen_keys: set = set()
+    unique_jobs = _dedup_and_filter_stale(all_jobs, seen_keys, max_age_days)
 
     dropped_by_policy = []
     if _is_preferred_location(location):
@@ -1702,7 +1814,11 @@ def search_jobs(
         _write_location_debug(dropped_by_policy)
 
     # Dead postings out first — no point fetching or scoring roles already filled.
-    unique_jobs, dropped = verify_jobs_online(unique_jobs, _progress=_progress)
+    # Undated jobs (wttj, remoteimpact, scrape sources) get checked too: without a
+    # date they used to bypass the liveness pass entirely.
+    unique_jobs, dropped = verify_jobs_online(
+        unique_jobs, verify_unknown_dates=True, _progress=_progress
+    )
 
     # Full descriptions next: validation scores the real posting text, and the
     # TUI cards get their previews for free.
