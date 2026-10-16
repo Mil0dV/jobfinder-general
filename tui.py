@@ -25,6 +25,7 @@ from agent import (
     ALL_SOURCES,
     PREFERRED_LOCATION,
     PROFILE_QUERY,
+    home_policy_summary,
     get_company_info,
     save_jobs,
     search_jobs,
@@ -349,13 +350,14 @@ def text_input(term, title, prompt, initial=""):
             value += key
 
 
-PREFERRED_LABEL = "My locations (CH · NL hybrid/remote · remote unless US/UK-only)"
+def _preferred_label() -> str:
+    return f"My locations ({home_policy_summary()} · remote unless US/UK-only)"
 
 
 def pick_location(term, state) -> str | None:
     """Location via history selection or free text. '' = no filter, None = cancel."""
     previous = [x for x in state.get("locations", []) if x != PREFERRED_LOCATION]
-    items = [PREFERRED_LABEL] + previous + ["(no location filter)", "(type a new location…)"]
+    items = [_preferred_label()] + previous + ["(no location filter)", "(type a new location…)"]
     choice = menu_select(term, "Where should the search look?", items)
     if choice is None:
         return None

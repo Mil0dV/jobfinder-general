@@ -561,9 +561,38 @@ def _load_liked_queue(ctx) -> int:
     """Fill ctx.queue with liked-but-not-applied jobs from disk. Returns the count."""
     from tui import liked_from_csv, load_decisions
 
-    ctx.queue = liked_from_csv(load_decisions())
+    ctx.queue = _drop_offline(liked_from_csv(load_decisions()))
     ctx.queue_pos = 0
     return len(ctx.queue)
+
+
+def _drop_offline(jobs: list) -> list:
+    """Check that queued jobs are still online; report and drop the dead ones."""
+    if not jobs:
+        return jobs
+    from agent import verify_jobs_online
+
+    print(f"   Checking that {len(jobs)} liked job(s) are still online...")
+    kept, dropped = verify_jobs_online(jobs, check_all=True)
+    if dropped:
+        from tui import _push_decision, job_key, load_decisions, record_decision
+
+        decisions = load_decisions()
+        for j in (j for j in jobs if j not in kept):
+            print(f"      ✗ offline, unliked: {j.get('title', '?')} @ {j.get('company', '?')}")
+            key = job_key(j)
+            record_decision(
+                decisions,
+                key,
+                {
+                    "decision": "no",
+                    "title": j.get("title", ""),
+                    "company": j.get("company", ""),
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            _push_decision(key, decisions[key])
+    return kept
 
 
 def _cmd_liked(args, ctx):
@@ -1117,13 +1146,17 @@ def _run_interactive(liked_queue: list | None = None, initial_job: dict | None =
     becomes the active session job; exiting the shell returns to the caller.
     """
     ctx = _Ctx()
-    if liked_queue:
-        ctx.queue = liked_queue
     _setup_readline()
     _print_banner()
+    if liked_queue:
+        ctx.queue = _drop_offline(liked_queue)
     if ctx.queue:
-        print(f"   ♥ {len(ctx.queue)} liked job(s) queued from the TUI — type /next to start.\n")
+        print(f"   ♥ {len(ctx.queue)} liked job(s) queued — starting with the first.\n")
+    elif liked_queue:
+        print("   All liked jobs have gone offline — nothing to apply to.\n")
     _print_invites_notice()
+    if ctx.queue:
+        _cmd_next("", ctx)
     if initial_job is not None:
         ctx.from_tui = True
         _job, role_desc = _resolve_job_context({"job": initial_job})
