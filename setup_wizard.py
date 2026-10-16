@@ -273,6 +273,10 @@ def _ask_preferences(resume: dict) -> dict:
         "locations": _input('Countries/regions (e.g. "Switzerland, Germany, remote Europe")'),
         "remote": _input("Remote preference (remote-only / hybrid / on-site OK)", default="hybrid"),
     }
+    answers["cover_letter_language"] = _input(
+        "Cover letter language (e.g. English, German, Dutch, or 'job' to match each posting)",
+        default="English",
+    )
     answers["drunk_mode"] = _yes(
         'Enable "drunk draft" cover letters for supermatches? (deliberately loose, '
         "unfiltered first drafts meant to be hand-rewritten)",
@@ -453,7 +457,12 @@ def run_setup() -> bool:
             break
         feedback = _input("What should change")
 
-    profile_out = {"version": 1, **profile, "drunk_mode": answers["drunk_mode"]}
+    profile_out = {
+        "version": 1,
+        **profile,
+        "drunk_mode": answers["drunk_mode"],
+        "cover_letter_language": answers["cover_letter_language"],
+    }
     with open(PROFILE_PATH, "w", encoding="utf-8") as f:
         json.dump(profile_out, f, indent=2, ensure_ascii=False)
     print(f"\n   Wrote {os.path.basename(PROFILE_PATH)}.")

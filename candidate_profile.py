@@ -272,6 +272,8 @@ HOME_COUNTRIES = _normalize_home_countries(
 # (see cover_letter.py). Explicit /drunk always works regardless.
 DRUNK_MODE_ENABLED = bool(_config.get("drunk_mode", True))
 
+# Preferred cover letter language: a language name, or "job" to match each posting.
+COVER_LETTER_LANGUAGE = str(_config.get("cover_letter_language") or "English").strip()
 
 # A "pearl" is a supermatch: strong on all three scores (role fit, startup-ness,
 # climate), with at least one 5 among them. Pearls jump to the front of the deck

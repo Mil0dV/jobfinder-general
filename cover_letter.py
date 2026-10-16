@@ -80,6 +80,23 @@ def _candidate_name() -> str:
     return candidate_name()
 
 
+def _language_instruction() -> str:
+    """Extra user-prompt line for non-English cover letters ("" for English)."""
+    from candidate_profile import COVER_LETTER_LANGUAGE as lang
+
+    if lang.lower() in ("", "english"):
+        return ""
+    if lang.lower() in ("job", "match", "posting"):
+        return (
+            "\n\nLanguage: write the letter in the language of the job posting. "
+            "Translate the style-guide voice, not its words, and close naturally in that language."
+        )
+    return (
+        f"\n\nLanguage: write the letter in {lang}. Translate the style-guide voice, "
+        f"not its words, and close naturally in {lang} instead of the English closing line."
+    )
+
+
 def _ensure_signoff(text: str) -> str:
     """Cover letters must always end with the canonical closing. It only ever
     came from the style-guide examples, and models (especially unthinking ones)
@@ -788,6 +805,8 @@ def generate_cover_letter(
     user_prompt = f"Write a cover letter for this position:\n\n{job_context}"
     if extra_context:
         user_prompt += f"\n\nAdditional context: {extra_context}"
+    lang_note = _language_instruction()
+    user_prompt += lang_note
 
     # Resolve company/role for header and filename
     company, title = extract_job_meta(job_context, job)
@@ -808,7 +827,10 @@ def generate_cover_letter(
     else:
         text = _stream_response(_cover_letter_system_prompt(), user_prompt, header)
 
-    if text:
+    if text and lang_note:
+        # The canonical closing is English-only; the model already closed in-language.
+        _save_cover_letter_pdf(text, make_output_stem("CL", company, title))
+    elif text:
         signed = _ensure_signoff(text)
         if signed.strip() != text.strip():
             print(f"\nRegards,\n{_candidate_name()}")
