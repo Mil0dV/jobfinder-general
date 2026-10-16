@@ -97,6 +97,16 @@ def _region_terms() -> list:
     ]
 
 
+def home_policy_summary() -> str:
+    """One-line description of the "my locations" rules, e.g. for the TUI location picker:
+    "Switzerland · Germany remote · Netherlands hybrid/remote"."""
+    parts = []
+    for h in HOME_COUNTRIES:
+        suffix = {"any": "", "hybrid_or_remote": " hybrid/remote", "remote_only": " remote"}[h["mode"]]
+        parts.append(_label(h["country"]) + suffix)
+    return " · ".join(parts) if parts else "remote only"
+
+
 def _home_region_label() -> str:
     """"Switzerland, the Netherlands or Germany" — for prompts that name the region."""
     names = [
