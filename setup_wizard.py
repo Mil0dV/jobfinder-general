@@ -86,6 +86,20 @@ _PROFILE_SCHEMA = {
                         "additionalProperties": False,
                     },
                 },
+                "home_countries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "country": {"type": "string"},
+                            "mode": {"enum": ["any", "hybrid_or_remote", "remote_only"]},
+                            "hybrid_cities": {"type": "array", "items": {"type": "string"}},
+                            "extra_terms": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["country", "mode", "hybrid_cities", "extra_terms"],
+                        "additionalProperties": False,
+                    },
+                },
                 "timezone": {"type": "string"},
                 "salary_region_hint": {"type": "string"},
             },
@@ -94,6 +108,7 @@ _PROFILE_SCHEMA = {
                 "adzuna_countries",
                 "adzuna_default",
                 "climatebase_countries",
+                "home_countries",
                 "timezone",
                 "salary_region_hint",
             ],
@@ -145,6 +160,17 @@ Field guidance:
 - locations.climatebase_countries: one entry per stated country: "country" = lowercase
   English name, "display_name" = the English display name as used by climatebase.org
   facets (e.g. "uk" -> "United Kingdom").
+- locations.home_countries: the countries the user would actually work in, primary
+  country first, each with the arrangement they accept there. "country" = lowercase
+  English name matching country_terms. "mode": "any" (on-site, hybrid and remote all
+  fine; usually their home country), "hybrid_or_remote" (hybrid/remote fine, only
+  explicitly on-site-only roles are dropped), "remote_only" (only fully remote roles;
+  use for countries they would not relocate or commute to). "hybrid_cities": for a
+  remote_only country, lowercase cities close enough to commute to for a hybrid role
+  (usually empty). "extra_terms": lowercase regional words (provinces, states,
+  cantons) that also place a job in the country and are not in country_terms
+  (usually empty). Derive the modes from the stated countries and remote preference.
+  "Remote Europe"-style wishes are not countries: remote roles are always kept.
 - locations.timezone: IANA timezone of the user's primary location.
 - locations.salary_region_hint: the region for salary estimates (e.g. "Europe",
   "North America").

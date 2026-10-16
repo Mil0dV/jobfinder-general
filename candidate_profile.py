@@ -137,6 +137,21 @@ _DEFAULT_CLIMATEBASE_COUNTRIES = {
     "france": "France",
 }
 
+# Where the candidate will work, and on what terms (the "my locations" search policy,
+# consumed by agent.py). Per country, in match-priority order:
+#   mode "any"              on-site, hybrid and remote are all fine
+#   mode "hybrid_or_remote" hybrid/remote fine; dropped only on an explicit on-site-only signal
+#   mode "remote_only"      fully remote only, except hybrid in `hybrid_cities` (commutable);
+#                           such countries are in the net but not fanned out per-country
+#                           by Adzuna / climate.jobs (remote roles surface via the full feeds)
+#   extra_terms             regional words that also place a job in the country
+_DEFAULT_HOME_COUNTRIES = [
+    {"country": "switzerland", "mode": "any"},
+    {"country": "germany", "mode": "remote_only", "hybrid_cities": ["freiburg"]},
+    {"country": "netherlands", "mode": "hybrid_or_remote"},
+]
+HOME_MODES = ("any", "hybrid_or_remote", "remote_only")
+
 _DEFAULT_TIMEZONE = "Europe/Zurich"
 _DEFAULT_SALARY_REGION_HINT = "Europe"
 
@@ -219,6 +234,39 @@ ADZUNA_DEFAULT = (
 CLIMATEBASE_COUNTRIES = _locations.get("climatebase_countries") or _DEFAULT_CLIMATEBASE_COUNTRIES
 TIMEZONE = _locations.get("timezone") or _DEFAULT_TIMEZONE
 SALARY_REGION_HINT = _locations.get("salary_region_hint") or _DEFAULT_SALARY_REGION_HINT
+
+
+def _normalize_home_countries(entries) -> list:
+    """Validate locations.home_countries; bad entries are skipped with a warning."""
+    out = []
+    for e in entries or []:
+        country = str(e.get("country", "")).strip().lower() if isinstance(e, dict) else ""
+        if not country:
+            print(
+                f"Warning: skipping home_countries entry without a country: {e!r}", file=sys.stderr
+            )
+            continue
+        mode = e.get("mode", "hybrid_or_remote")
+        if mode not in HOME_MODES:
+            print(
+                f"Warning: unknown mode {mode!r} for {country}; using 'hybrid_or_remote'.",
+                file=sys.stderr,
+            )
+            mode = "hybrid_or_remote"
+        out.append(
+            {
+                "country": country,
+                "mode": mode,
+                "hybrid_cities": [str(c).lower() for c in e.get("hybrid_cities") or []],
+                "extra_terms": [str(t).lower() for t in e.get("extra_terms") or []],
+            }
+        )
+    return out
+
+
+HOME_COUNTRIES = _normalize_home_countries(
+    _locations.get("home_countries") or _DEFAULT_HOME_COUNTRIES
+)
 
 # Whether pearls automatically get the "drunk draft" cover letter treatment
 # (see cover_letter.py). Explicit /drunk always works regardless.

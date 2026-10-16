@@ -20,6 +20,7 @@ from candidate_profile import (
     CLIMATEBASE_COUNTRIES,
     COUNTRY_TERMS,
     FIT_RUBRIC,
+    HOME_COUNTRIES,
     NONCLIMATE_MIN_FIT,
     PROFILE_QUERY_SEEDS,
     TIMEZONE,
@@ -44,9 +45,67 @@ REMOTE_HINTS = [
     "télétravail",
 ]
 
-# Sentinel location: Switzerland (any arrangement), Netherlands (hybrid/remote),
+# Sentinel location: the candidate's home countries under their per-country rules
+# (profile.json locations.home_countries, see candidate_profile.HOME_COUNTRIES),
 # plus remote roles that aren't restricted to the US or UK.
 PREFERRED_LOCATION = "my locations"
+
+# Words/regexes that place a job in a country beyond COUNTRY_TERMS: regions, provinces,
+# cantons. Applied whenever that country is one of the candidate's home countries.
+_REGION_TERMS = {
+    "netherlands": [
+        "noord-holland",
+        "zuid-holland",
+        "north holland",
+        "south holland",
+        "noord-brabant",
+        "gelderland",
+        "overijssel",
+        "friesland",
+        "drenthe",
+        "flevoland",
+        "zeeland",
+        "groningen",
+    ],
+}
+# Swiss address formats the country terms miss: "Wil SG, 9500" — a canton code
+# after the city name, ending the string or followed by a comma / 4-digit PLZ.
+_REGION_PATTERNS = {
+    "switzerland": re.compile(
+        r"\b[\wäöüéèà.\-]+ (ag|ai|ar|be|bl|bs|fr|ge|gl|gr|ju|lu|ne|nw|ow|sg|sh|so|sz|tg|ti|ur|vd|vs|zg|zh)\b"
+        r"(?=$|\s*,|\s+\d{4}\b)"
+    ),
+}
+_COUNTRY_LABELS = {"uk": "UK", "usa": "USA"}
+_THE_COUNTRIES = {"netherlands", "uk", "usa", "united kingdom", "united states", "philippines"}
+
+
+def _label(country: str) -> str:
+    return _COUNTRY_LABELS.get(country, country.title())
+
+
+def _search_countries() -> list:
+    """Home countries searched one by one (Adzuna, climate.jobs). Remote-only countries
+    are in the net but not a work location per se, so they're not fanned out."""
+    return [h["country"] for h in HOME_COUNTRIES if h["mode"] != "remote_only"]
+
+
+def _region_terms() -> list:
+    """Regional words for all home countries (provinces, user-supplied extras)."""
+    return [
+        t for h in HOME_COUNTRIES for t in _REGION_TERMS.get(h["country"], []) + h["extra_terms"]
+    ]
+
+
+def _home_region_label() -> str:
+    """"Switzerland, the Netherlands or Germany" — for prompts that name the region."""
+    names = [
+        ("the " if h["country"] in _THE_COUNTRIES else "") + _label(h["country"])
+        for h in HOME_COUNTRIES
+    ]
+    if len(names) < 2:
+        return names[0] if names else "Europe"
+    return ", ".join(names[:-1]) + " or " + names[-1]
 
 
 def _is_preferred_location(location: str) -> bool:
@@ -60,7 +119,7 @@ def _location_terms(location: str) -> set:
     loc = location.lower().strip()
     if loc == PREFERRED_LOCATION:
         terms = set()
-        for country in ("switzerland", "netherlands"):
+        for country in _search_countries():
             terms.add(country)
             terms.update(COUNTRY_TERMS.get(country, []))
         return terms
@@ -83,27 +142,6 @@ _US_UK_PATTERN = re.compile(
 )
 _GLOBAL_HINTS = ["worldwide", "global", "anywhere", "europe", "emea", "international"]
 
-# Swiss address formats the country terms miss: "Wil SG, 9500" — a canton code
-# after the city name, ending the string or followed by a comma / 4-digit PLZ.
-_CH_CANTON_PATTERN = re.compile(
-    r"\b[\wäöüéèà.\-]+ (ag|ai|ar|be|bl|bs|fr|ge|gl|gr|ju|lu|ne|nw|ow|sg|sh|so|sz|tg|ti|ur|vd|vs|zg|zh)\b"
-    r"(?=$|\s*,|\s+\d{4}\b)"
-)
-# Dutch provinces (e.g. "Enkhuizen, Noord-Holland").
-_NL_EXTRA_TERMS = [
-    "noord-holland",
-    "zuid-holland",
-    "north holland",
-    "south holland",
-    "noord-brabant",
-    "gelderland",
-    "overijssel",
-    "friesland",
-    "drenthe",
-    "flevoland",
-    "zeeland",
-    "groningen",
-]
 # Explicit "you must come to the office" signals (only these drop an NL job).
 _ONSITE_HINTS = [
     "on-site",
@@ -120,44 +158,51 @@ _ONSITE_HINTS = [
 ]
 
 
-# Germany is in the search net but not a work location per se: the candidate lives
-# in the countryside, so a German job only counts when it's fully remote, or hybrid
-# based in Freiburg (the one city within plausible reach). Pure on-site DE roles drop.
-_FREIBURG_PATTERN = re.compile(r"\b(freiburg|freiburg im breisgau|freiburg i\.?br\.?)\b", re.I)
+def _in_home_country(home: dict, loc: str) -> bool:
+    """True if a location string places a job in this home country."""
+    country = home["country"]
+    terms = (
+        list(COUNTRY_TERMS.get(country, [country])) + _REGION_TERMS.get(country, [])
+        + home["extra_terms"]
+    )
+    pattern = _REGION_PATTERNS.get(country)
+    return bool(_term_pattern(terms).search(loc) or (pattern and pattern.search(loc)))
 
 
 def _preferred_location_verdict(job: dict) -> tuple[bool, str]:
-    """Apply the PREFERRED_LOCATION policy; returns (keep, drop_reason)."""
+    """Apply the PREFERRED_LOCATION policy (HOME_COUNTRIES); returns (keep, drop_reason)."""
     loc = (job.get("location") or "").lower()
     wfh = (job.get("wfh_policy") or "").lower()
     blob = f"{loc} {wfh} {(job.get('snippet') or '')[:2000].lower()}"
-    remote_or_hybrid = "hybrid" in blob or "hybride" in blob or any(h in blob for h in REMOTE_HINTS)
+    hybrid = "hybrid" in blob or "hybride" in blob
+    remote = any(h in blob for h in REMOTE_HINTS)
     onsite = any(h in blob for h in _ONSITE_HINTS)
-    if _term_pattern(COUNTRY_TERMS.get("switzerland", ["switzerland"])).search(
-        loc
-    ) or _CH_CANTON_PATTERN.search(loc):
-        return True, ""  # CH: on-site, hybrid, or remote all fine
-    de_terms = list(COUNTRY_TERMS.get("germany", ["germany", "deutschland"]))
-    if _term_pattern(de_terms).search(loc):
-        if "remote" in blob or any(h in blob for h in REMOTE_HINTS):
-            return True, ""  # DE remote: fine from anywhere
-        if ("hybrid" in blob or "hybride" in blob) and _FREIBURG_PATTERN.search(loc):
-            return True, ""  # DE hybrid: only Freiburg is commutable
-        return False, "Germany outside Freiburg / not remote (countryside commute)"
-    nl_terms = list(COUNTRY_TERMS.get("netherlands", ["netherlands"])) + _NL_EXTRA_TERMS
-    if _term_pattern(nl_terms).search(loc):
-        # NL: benefit of the doubt — drop only on an explicit on-site-only signal
-        if onsite and not remote_or_hybrid:
-            return False, "NL with explicit on-site signal and no hybrid/remote"
+    for home in HOME_COUNTRIES:
+        if not _in_home_country(home, loc):
+            continue
+        name, mode = _label(home["country"]), home["mode"]
+        if mode == "any":
+            return True, ""
+        if mode == "remote_only":
+            if remote:
+                return True, ""
+            cities = home["hybrid_cities"]
+            if hybrid and cities and _term_pattern(cities).search(loc):
+                return True, ""  # hybrid is fine only where it is commutable
+            where = f"outside {', '.join(c.title() for c in cities)} / " if cities else ""
+            return False, f"{name} {where}not remote"
+        # hybrid_or_remote: benefit of the doubt — drop only on an explicit on-site signal
+        if onsite and not (hybrid or remote):
+            return False, f"{name} with explicit on-site signal and no hybrid/remote"
         return True, ""
-    if remote_or_hybrid:
+    if hybrid or remote:
         # Remote elsewhere: keep unless restricted to the US or UK
         if _US_UK_PATTERN.search(f"{loc} {wfh}") and not any(h in loc for h in _GLOBAL_HINTS):
             return False, f"remote but US/UK-restricted location ({job.get('location')})"
         if re.search(r"\b(us|uk)[- ]only\b|\bonly (candidates|applicants) in the (us|uk)\b", blob):
             return False, "remote but description says US/UK only"
         return True, ""
-    return False, "outside CH/NL and no remote/hybrid signal"
+    return False, "outside home countries and no remote/hybrid signal"
 
 
 def _passes_preferred_location(job: dict) -> bool:
@@ -414,7 +459,12 @@ def search_adzuna(query: str, location: str = "") -> list:
 
     loc = (location or "").lower()
     if _is_preferred_location(location):
-        country_codes = ["ch", "nl"]
+        country_codes = [
+            ADZUNA_COUNTRIES[c] for c in _search_countries() if c in ADZUNA_COUNTRIES
+        ]
+        if not country_codes:
+            print("   Adzuna: skipped (no Adzuna country among your home countries)")
+            return []
     else:
         country_code = ADZUNA_DEFAULT
         for name, code in ADZUNA_COUNTRIES.items():
@@ -726,13 +776,14 @@ def search_climatebase(query: str, location: str = "") -> list:
     facet_filters = []
     loc = (location or "").lower()
     if _is_preferred_location(location):
-        # OR group: CH or NL jobs, German jobs (the verdict policy then keeps only
-        # DE-remote or Freiburg-hybrid), or remote anywhere
+        # OR group: every home country (the verdict policy then trims e.g. remote-only
+        # countries), or remote anywhere
         facet_filters = [
             [
-                "countries:Switzerland",
-                "countries:Netherlands",
-                "countries:Germany",
+                *(
+                    f"countries:{CLIMATEBASE_COUNTRIES.get(h['country'], h['country'].title())}"
+                    for h in HOME_COUNTRIES
+                ),
                 "remote_preferences:Remote",
             ]
         ]
@@ -1214,7 +1265,9 @@ def search_climatejobs(query: str, location: str = "") -> list:
     # (slug, filter_locally) targets. filter_locally=False trusts the server-side
     # location page; the empty-slug full catalog is filtered against `terms`.
     if _is_preferred_location(location):
-        targets = [("switzerland", False), ("netherlands", False), ("", True)]
+        targets = [
+            (re.sub(r"[^a-z0-9]+", "-", c).strip("-"), False) for c in _search_countries()
+        ] + [("", True)]
     else:
         slug = re.sub(r"[^a-z0-9]+", "-", (location or "").lower()).strip("-")
         targets = [(slug, not slug)]
@@ -1665,14 +1718,18 @@ def _drop_region_locked(jobs: list, location: str) -> tuple[list, list]:
 
     terms = set(_location_terms(location))
     if _is_preferred_location(location):
-        terms.update(_NL_EXTRA_TERMS)
+        terms.update(_region_terms())
     terms = sorted(terms)
     local = _term_pattern(terms) if terms else None
     kept, dropped = [], []
     for job in jobs:
         lock = (job.get("_jev") or {}).get("region_locked", 0)
         loc = (job.get("location") or "").lower()
-        is_local = bool(local and local.search(loc)) or bool(_CH_CANTON_PATTERN.search(loc))
+        is_local = bool(local and local.search(loc)) or any(
+            _REGION_PATTERNS[h["country"]].search(loc)
+            for h in HOME_COUNTRIES
+            if h["country"] in _REGION_PATTERNS
+        )
         if lock >= jev.REGION_LOCK_THRESHOLD and not is_local:
             dropped.append({**job, "drop_reason": f"Jev: region-locked ({lock:.2f})"})
         else:
@@ -1840,7 +1897,7 @@ def search_jobs(
 
     if jev.enabled():
         region = (
-            "Switzerland, the Netherlands or Germany"
+            _home_region_label()
             if _is_preferred_location(location)
             else (location or "Europe")
         )

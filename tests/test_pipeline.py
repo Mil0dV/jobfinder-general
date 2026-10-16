@@ -122,3 +122,59 @@ def test_ch_and_nl_behaviour_unchanged():
     # Note: "no remote" counts as a remote hint in the existing policy (substring
     # match) — kept as-is here; worth a separate look later.
     assert not _verdict("Amsterdam, Netherlands", snippet="on-site only, must be in office")[0]
+
+
+# --- location policy is profile-driven ------------------------------------------------
+
+def _with_home(monkeypatch, entries):
+    import candidate_profile
+
+    monkeypatch.setattr(agent, "HOME_COUNTRIES", candidate_profile._normalize_home_countries(entries))
+
+
+def test_custom_policy_drives_verdict(monkeypatch):
+    _with_home(
+        monkeypatch,
+        [
+            {"country": "austria", "mode": "any"},
+            {"country": "france", "mode": "remote_only", "hybrid_cities": ["lyon"]},
+        ],
+    )
+    assert _verdict("Vienna, Austria", snippet="on-site")[0]
+    assert _verdict("Paris, France", snippet="fully remote")[0]
+    assert _verdict("Lyon, France", snippet="hybrid, 2 days a week")[0]
+    ok, reason = _verdict("Paris, France", snippet="on-site")
+    assert not ok and "Lyon" in reason
+    # the user's own default countries mean nothing under another profile
+    assert not _verdict("Zurich, Switzerland", snippet="on-site")[0]
+
+
+def test_custom_policy_derives_source_countries(monkeypatch):
+    _with_home(
+        monkeypatch,
+        [
+            {"country": "austria", "mode": "any"},
+            {"country": "france", "mode": "remote_only"},
+            {"country": "ireland", "mode": "hybrid_or_remote"},
+        ],
+    )
+    assert agent._search_countries() == ["austria", "ireland"]
+    assert agent._home_region_label() == "Austria, France or Ireland"
+    assert {"austria", "ireland"} <= agent._location_terms(agent.PREFERRED_LOCATION)
+    assert "france" not in agent._location_terms(agent.PREFERRED_LOCATION)
+
+
+def test_default_policy_matches_original_countries():
+    assert agent._search_countries() == ["switzerland", "netherlands"]
+    assert agent._home_region_label() == "Switzerland, Germany or the Netherlands"
+
+
+def test_bad_home_entries_are_skipped_or_defaulted():
+    import candidate_profile
+
+    out = candidate_profile._normalize_home_countries(
+        [{"country": ""}, "junk", {"country": "Spain", "mode": "nonsense"}]
+    )
+    assert out == [
+        {"country": "spain", "mode": "hybrid_or_remote", "hybrid_cities": [], "extra_terms": []}
+    ]

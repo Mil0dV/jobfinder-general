@@ -130,7 +130,7 @@ def _questions(region: str) -> dict:
     }
 
 
-def evaluate(job: dict, region: str = "Switzerland or the Netherlands", retries: int = 2):
+def evaluate(job: dict, region: str = "Europe", retries: int = 2):
     """Return {"fit", "startup", "climate": floats 0–5, "climate_confidence": float,
     "region_locked": float 0–1} for one job, or None when Jev is unconfigured or unreachable."""
     if not enabled():
@@ -165,7 +165,7 @@ def evaluate(job: dict, region: str = "Switzerland or the Netherlands", retries:
     return None
 
 
-def annotate(jobs: list, region: str = "Switzerland or the Netherlands", _progress=None) -> int:
+def annotate(jobs: list, region: str = "Europe", _progress=None) -> int:
     """Attach runtime-only `_jev` to each job in parallel; returns how many got a verdict."""
     if not enabled() or not jobs:
         return 0
