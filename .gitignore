@@ -57,6 +57,8 @@ job_descriptions.json
 *.swp
 *.swo
 *~
+.idea
+*.iml
 
 # OS
 .DS_Store

@@ -15,6 +15,8 @@ import sys
 
 from dotenv import load_dotenv
 
+from doc_text import SUPPORTED_EXTENSIONS, SUPPORTED_LABEL, extract_text
+
 _project_root = os.path.dirname(os.path.abspath(__file__))
 PROFILE_PATH = os.path.join(_project_root, "profile.json")
 STYLE_GUIDE_PATH = os.path.join(_project_root, "Cover-letter styleguide.md")
@@ -232,7 +234,7 @@ def _ingest_resume() -> dict | None:
     if existing and _yes(f"Found {os.path.basename(existing)} — use it?", default=True):
         path = existing
     else:
-        path = _input("Path to your resume (.docx, .pdf, or .txt)")
+        path = _input(f"Path to your resume ({SUPPORTED_LABEL})")
         if not path:
             print("A resume is required — aborting setup.")
             return None
@@ -367,9 +369,17 @@ def _generate_style_guide(sample_paths: list[str]) -> bool:
     samples = []
     for p in sample_paths:
         try:
-            with open(os.path.expanduser(p), encoding="utf-8") as f:
-                samples.append(f.read().strip())
-        except OSError as e:
+            path = os.path.expanduser(p)
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                print(f"   Skipping {p}: unsupported file type (use {SUPPORTED_LABEL})")
+                continue
+            text = extract_text(path)
+            if text:
+                samples.append(text)
+            else:
+                print(f"   Skipping {p}: no text found")
+        except Exception as e:
             print(f"   Skipping {p}: {e}")
     if not samples:
         return False
@@ -450,7 +460,7 @@ def run_setup() -> bool:
 
     print("\nOptional: point me at 1-2 cover letters you've written and I'll build a")
     print("personal style guide from them (otherwise a neutral built-in style is used).")
-    sample = _input("Path(s) to sample letter(s), comma-separated (Enter to skip)")
+    sample = _input(f"Path(s) to sample letter(s) ({SUPPORTED_LABEL}), comma-separated (Enter to skip)")
     if sample:
         _generate_style_guide([p.strip() for p in sample.split(",") if p.strip()])
 

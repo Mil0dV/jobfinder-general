@@ -17,9 +17,9 @@ import os
 import re
 import sys
 
-from docx import Document
 
 import llm
+from doc_text import extract_text
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -95,29 +95,9 @@ def _validate_resume_data(data: dict) -> dict:
     return data
 
 
-def _extract_docx_text(path: str) -> str:
-    """Pull the visible text out of a .docx, one paragraph per line."""
-    doc = Document(path)
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-
-
-def _extract_pdf_text(path: str) -> str:
-    """Pull the text out of a PDF, page by page."""
-    from pypdf import PdfReader
-
-    reader = PdfReader(path)
-    return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-
-
 def extract_resume_text(path: str) -> str:
     """Extract plain text from a resume file (.docx, .pdf, or plain text)."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext == ".docx":
-        return _extract_docx_text(path)
-    if ext == ".pdf":
-        return _extract_pdf_text(path)
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read().strip()
+    return extract_text(path)
 
 
 def _docx_hash(path: str) -> str:
