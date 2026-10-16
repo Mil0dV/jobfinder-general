@@ -457,12 +457,14 @@ no commentary."""
 
 
 _REVISE_INSTRUCTION = """Now re-read your draft as a skeptical editor who can smell AI writing a mile off.
-Hunt for: uniform sentence rhythm, symmetric constructions, tidy punchline endings,
-rule-of-three lists, generic claims that could appear in anyone's application,
-anything performed rather than said, and any banned pattern that slipped through.
-Rewrite it, fixing what you find and keeping what already sounds human. Keep the
-same facts and roughly the same length. Output ONLY the final text — no commentary,
-no explanation of what you changed."""
+This is NOT a rewrite. Find only the sentences that carry an AI tell: uniform sentence rhythm,
+symmetric constructions, tidy punchline endings, rule-of-three lists, generic claims that could
+appear in anyone's application, anything performed rather than said, a banned pattern that
+slipped through. Rewrite just those sentences. Every other sentence stays character for
+character as it is: same words, same order, same punctuation. If nothing carries a tell,
+return the draft unchanged. Do not add, remove or reorder content, and do not polish
+sentences that are fine. Output ONLY the full final text, no commentary, no explanation of
+what you changed."""
 
 
 # ---------------------------------------------------------------------------
