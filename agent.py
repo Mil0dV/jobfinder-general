@@ -1840,7 +1840,7 @@ def search_jobs(
 
     if jev.enabled():
         region = (
-            "Switzerland or the Netherlands"
+            "Switzerland, the Netherlands or Germany"
             if _is_preferred_location(location)
             else (location or "Europe")
         )
