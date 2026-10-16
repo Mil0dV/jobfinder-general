@@ -541,9 +541,10 @@ def _stream_response(
                     full_text += text
                     print(text, end="", flush=True)
         else:
-            print("   Drafting with " + llm.generation_model("claude-opus-4-7"), flush=True)
+            draft_model = llm.generation_model("claude-opus-4-7")
+            print("   Drafting with " + llm.describe_model(draft_model), flush=True)
             draft = client.messages.create(
-                model=llm.generation_model("claude-opus-4-7"),
+                model=draft_model,
                 max_tokens=1024,
                 thinking=llm.generation_thinking(),
                 system=system,
@@ -562,8 +563,11 @@ def _stream_response(
                 # streaming a fresh single pass instead.
                 print("   (draft came back empty; writing in one pass)\n", flush=True)
 
+            revise_model = llm.generation_model("claude-opus-4-7")
+            if revise_model != draft_model:
+                print("   Revising with " + llm.describe_model(revise_model), flush=True)
             with client.messages.stream(
-                model=llm.generation_model("claude-opus-4-7"),
+                model=revise_model,
                 max_tokens=1024,
                 thinking=llm.tellcheck_thinking(),
                 system=system,

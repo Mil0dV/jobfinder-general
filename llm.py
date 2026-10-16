@@ -23,8 +23,10 @@ answers at import (GET MARVIN_BASE_URL/models), cover letters and resume
 tailoring request llm.generation_model(...) instead, which resolves to
 the model llama-swap has loaded on the rig (http://marvin:8080/v1): MARVIN_PREFERRED_MODEL
 (default qwen3.8-27b) if it is loaded, else MARVIN_MODEL (default gandalf); setting
-MARVIN_MODEL explicitly in .env pins it and skips the check. No key, rig down, or LLM_PROVIDER=anthropic: the normal tiers
-are used unchanged. A marvin call that hits a network error mid-flight falls
+MARVIN_MODEL explicitly in .env pins it and skips the check. No key or LLM_PROVIDER=anthropic: the normal tiers
+are used unchanged. If the rig is down when a generation call asks for it, the user gets
+a short press-G-to-retry countdown before the call falls back (re-probed per call, not
+once at import). A marvin call that hits a network error mid-flight falls
 back to the configured provider once.
 
 Exception classes (``llm.AuthError``, ``llm.NetworkError``, ``llm.APIError``)
@@ -36,6 +38,7 @@ import json
 import os
 import random
 import re
+import sys
 import time
 from types import SimpleNamespace
 
@@ -78,7 +81,7 @@ MARVIN_TELLCHECK_THINKING = (os.getenv("MARVIN_TELLCHECK_THINKING") or "off").st
 MARVIN_KEY = os.getenv("MARVIN_KEY", "")
 
 
-def marvin_loaded_models() -> set[str] | None:
+def marvin_loaded_models(timeout: float = 3) -> set[str] | None:
     """Ids llama-swap reports as loaded (aliases included), or None if the rig is
     unreachable / not llama-swap-shaped. GET /v1/models carries status.value."""
     if not MARVIN_KEY or PROVIDER == "anthropic":
@@ -87,7 +90,7 @@ def marvin_loaded_models() -> set[str] | None:
         r = requests.get(
             f"{MARVIN_BASE_URL}/models",
             headers={"Authorization": f"Bearer {MARVIN_KEY}"},
-            timeout=3,
+            timeout=timeout,
         )
         if r.status_code != 200:
             return None
@@ -100,15 +103,92 @@ def marvin_loaded_models() -> set[str] | None:
         return None
 
 
-_marvin_loaded = marvin_loaded_models()
-MARVIN_READY = _marvin_loaded is not None
-if MARVIN_READY and not _marvin_pinned and MARVIN_PREFERRED_MODEL in _marvin_loaded:
-    MARVIN_MODEL = MARVIN_PREFERRED_MODEL
+_DEFAULT_MARVIN_MODEL = MARVIN_MODEL
+MARVIN_READY = False
+_marvin_down_until = 0.0  # after a declined retry, don't nag again until then
+_MARVIN_RETRY_SECS = 5
+_MARVIN_QUIET_SECS = 60
+
+
+def _probe_marvin(timeout: float = 3) -> bool:
+    """(Re)check the rig and update MARVIN_READY / MARVIN_MODEL from what is loaded."""
+    global MARVIN_READY, MARVIN_MODEL
+    loaded = marvin_loaded_models(timeout)
+    MARVIN_READY = loaded is not None
+    if MARVIN_READY and not _marvin_pinned:
+        MARVIN_MODEL = (
+            MARVIN_PREFERRED_MODEL if MARVIN_PREFERRED_MODEL in loaded else _DEFAULT_MARVIN_MODEL
+        )
+    return MARVIN_READY
+
+
+_probe_marvin()
+
+
+def describe_model(model: str | None, allow_marvin: bool = True) -> str:
+    """Human-readable "model (backend)" for what a request for `model` really runs on."""
+    if PROVIDER == "anthropic":
+        return f"{model} (anthropic)"
+    b = _OpenRouterMessages("")._backend_for(model, allow_marvin=allow_marvin)
+    return f"{b['model']} ({b['name']})"
+
+
+def _countdown_for_retry(message: str) -> bool:
+    """Show `message` with a live countdown; True if the user pressed G to retry.
+    Non-interactive sessions never wait."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        for left in range(_MARVIN_RETRY_SECS, 0, -1):
+            print(f"\r\033[K   {message} (press G to retry, {left}s)", end="", flush=True)
+            deadline = time.time() + 1
+            while (wait := deadline - time.time()) > 0:
+                if select.select([fd], [], [], wait)[0] and os.read(fd, 1).lower() == b"g":
+                    print("\r\033[K   retrying...", flush=True)
+                    return True
+        print("\r\033[K", end="", flush=True)
+        return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def ensure_marvin(fallback: str | None = None, force: bool = False) -> bool:
+    """True if the rig is usable now. If it is down, offer a short press-G-to-retry
+    window before the caller falls back, then stay quiet for a minute so one
+    letter's several passes don't each ask. `force` skips that quiet period."""
+    global _marvin_down_until
+    if not MARVIN_KEY or PROVIDER == "anthropic":
+        return False
+    if MARVIN_READY and not force:
+        return True
+    if not force and time.time() < _marvin_down_until:
+        return False
+    target = describe_model(fallback, allow_marvin=False) if fallback else "the fallback model"
+    while not _probe_marvin(timeout=5):
+        if not _countdown_for_retry(f"{MARVIN_MODEL} (marvin) unreachable; using {target}"):
+            _marvin_down_until = time.time() + _MARVIN_QUIET_SECS
+            print(f"   {MARVIN_MODEL} (marvin) unreachable; using {target}", flush=True)
+            return False
+    return True
+
+
+def _marvin_failed() -> None:
+    """A call to the rig died mid-flight: stop trusting it until it is re-probed."""
+    global MARVIN_READY, _marvin_down_until
+    MARVIN_READY = False
+    _marvin_down_until = 0.0
 
 
 def generation_model(fallback: str) -> str:
     """Model generation-tier call sites should request: marvin when it is up."""
-    return MARVIN_MODEL if MARVIN_READY else fallback
+    return MARVIN_MODEL if ensure_marvin(fallback) else fallback
 
 
 def generation_thinking() -> str | None:
@@ -117,14 +197,14 @@ def generation_thinking() -> str | None:
     chat template's reasoning_effort (low|medium|high). Measured on flash-next:
     low and medium consume nearly the same thinking; high costs 3x for no gain.
     Tune with MARVIN_THINKING (default low)."""
-    return MARVIN_THINKING if MARVIN_READY else None
+    return MARVIN_THINKING if ensure_marvin() else None
 
 
 def tellcheck_thinking() -> str | None:
     """Thinking for mechanical tell-check / revision passes. Unlike drafting,
     flattening prose gains nothing from reasoning, so the rig defaults to off.
     Tune with MARVIN_TELLCHECK_THINKING (default off)."""
-    return MARVIN_TELLCHECK_THINKING if MARVIN_READY else None
+    return MARVIN_TELLCHECK_THINKING if ensure_marvin() else None
 
 
 if PROVIDER == "anthropic":
@@ -392,8 +472,11 @@ class _OpenRouterMessages:
         except NetworkError:
             if backend["name"] != "marvin":
                 raise
-            print("   (marvin unreachable; falling back to the configured model)")
-            backend = self._backend_for(model, allow_marvin=False)
+            _marvin_failed()
+            if ensure_marvin(model, force=True):
+                backend = self._backend_for(model)
+            else:
+                backend = self._backend_for(model, allow_marvin=False)
             data = _attempt(backend)
         if "choices" not in data:
             raise APIError(f"{backend['name']} error: {json.dumps(data)[:500]}")
@@ -437,6 +520,7 @@ class _OpenRouterMessages:
         messages=None,
         system=None,
         thinking=None,
+        output_config=None,
         **_ignored,
     ):
         backend = self._backend_for(model)
@@ -446,6 +530,7 @@ class _OpenRouterMessages:
             messages=messages,
             system=system,
             thinking=thinking,
+            output_config=output_config,
         )
         payload["stream"] = True
         return _OpenRouterStream(self, payload, backend)
@@ -459,6 +544,8 @@ class _OpenRouterStream:
         self._payload = payload
         self._backend = backend
         self._response = None
+        # Optional callback for reasoning deltas (rig/openrouter thinking text).
+        self.on_reasoning = None
 
     def __enter__(self):
         try:
@@ -466,8 +553,10 @@ class _OpenRouterStream:
         except NetworkError:
             if self._backend["name"] != "marvin":
                 raise
-            print("   (marvin unreachable; falling back to the configured model)")
-            self._backend = self._api._backend_for(self._backend["requested"], allow_marvin=False)
+            requested = self._backend["requested"]
+            _marvin_failed()
+            retry_marvin = ensure_marvin(requested, force=True)
+            self._backend = self._api._backend_for(requested, allow_marvin=retry_marvin)
             self._payload["model"] = self._backend["model"]
             self._response = self._api._post(self._payload, self._backend, stream=True)
         # SSE has no charset header, so requests would decode as ISO-8859-1
@@ -491,6 +580,9 @@ class _OpenRouterStream:
                 delta = json.loads(data)["choices"][0]["delta"]
             except (json.JSONDecodeError, KeyError, IndexError):
                 continue
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning and self.on_reasoning:
+                self.on_reasoning(reasoning)
             chunk = delta.get("content")
             if chunk:
                 yield chunk

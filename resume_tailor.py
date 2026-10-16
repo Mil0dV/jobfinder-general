@@ -477,6 +477,44 @@ def _enforce_list_selection(base_str: str, tailored_str: str) -> str:
     return " • ".join(items) if items else base_str
 
 
+def _stream_json(client, *, system: str, user_msg: str, schema: dict, thinking) -> str:
+    """Run a JSON-schema call, echoing the model's reasoning (dim) and output live.
+
+    Streaming is only so the user can read along; returns the final JSON text.
+    """
+    dim, reset = ("\033[2m", "\033[0m") if sys.stdout.isatty() else ("", "")
+    state = {"thinking": False}
+
+    def on_reasoning(chunk: str):
+        if not state["thinking"]:
+            print(f"   {dim}[thinking]{reset}")
+            state["thinking"] = True
+        print(f"{dim}{chunk}{reset}", end="", flush=True)
+
+    parts = []
+    model = llm.generation_model("claude-sonnet-4-6")
+    print(f"   model: {llm.describe_model(model)}", flush=True)
+    with client.messages.stream(
+        model=model,
+        max_tokens=8192,
+        thinking=thinking,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+    ) as stream:
+        if hasattr(stream, "on_reasoning"):
+            stream.on_reasoning = on_reasoning
+        started = False
+        for chunk in stream.text_stream:
+            if not started:
+                print(("\n" if state["thinking"] else "") + "   [output]")
+                started = True
+            parts.append(chunk)
+            print(chunk, end="", flush=True)
+    print()
+    return llm._strip_json_fences("".join(parts))
+
+
 def get_tailored_resume(role_description: str) -> dict:
     """Send resume + role description to Claude, get back tailored resume data.
 
@@ -502,22 +540,15 @@ Here is the role description to tailor for:
 
 Return only the fields you changed, as a JSON patch (see OUTPUT FORMAT)."""
 
-    print("   Tailoring resume with Claude...")
+    print("   Tailoring resume...")
 
-    response = client.messages.create(
-        model=llm.generation_model("claude-sonnet-4-6"),
-        max_tokens=8192,
-        thinking=llm.generation_thinking(),
+    text = _stream_json(
+        client,
         system=system,
-        messages=[{"role": "user", "content": user_msg}],
-        output_config={"format": {"type": "json_schema", "schema": DIFF_SCHEMA}},
+        user_msg=user_msg,
+        schema=DIFF_SCHEMA,
+        thinking=llm.generation_thinking(),
     )
-
-    if response.stop_reason == "max_tokens":
-        print("Error: Claude's response was cut off before the full resume was returned.")
-        sys.exit(1)
-
-    text = next(b.text for b in response.content if b.type == "text")
 
     try:
         patch = json.loads(text)
@@ -529,7 +560,12 @@ Return only the fields you changed, as a JSON patch (see OUTPUT FORMAT)."""
 
     tailored = _apply_patch(payload, patch)
 
-    changed = _changed_fields(payload, tailored)
+    # Competencies/skills are plain selections (enforced below), not prose.
+    changed = [
+        k
+        for k in _changed_fields(payload, tailored)
+        if k not in ("core_competencies", "technical_skills")
+    ]
     if changed:
         revised = _tellcheck(payload, tailored, changed)
         if revised:
@@ -554,8 +590,45 @@ never remove: every substantive claim in the tailored draft stays, just expresse
 plainer, and the emphasis the tailor chose stays. NEVER add new skills, claims or \
 keywords. Do NOT include fields that are not listed as changed — they are already \
 correct.
+You are given the exact LINES the tailor edited. Rewrite only those lines, and only \
+where they carry a tell. Every other line, in the fields and entries you return, \
+must be copied back character for character, in the same order. A line with no tell \
+is returned unchanged.
 Output ONLY a JSON object with the changed fields listed below. When an experiences \
 entry is listed, return that entry COMPLETE with the identical title. No commentary."""
+
+
+def _flat_lines(value) -> list[str]:
+    """All strings inside a resume field (lists/dicts traversed)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [x for v in value.values() for x in _flat_lines(v)]
+    if isinstance(value, list):
+        return [x for v in value for x in _flat_lines(v)]
+    return []
+
+
+def _edited_lines(base: dict, tailored: dict, changed: list[str]) -> list[str]:
+    """Lines in the changed fields that don't appear verbatim in the base resume."""
+    known = set(_flat_lines(base))
+    return [ln for k in changed for ln in _flat_lines(tailored.get(k)) if ln not in known]
+
+
+def _restore_untouched_lines(base: dict, tailored: dict, revised: dict) -> None:
+    """Undo tell-check rewrites of experience lines the tailor never edited."""
+    known = set(_flat_lines(base))
+    by_title = {e.get("title"): e for e in tailored.get("experiences", []) if isinstance(e, dict)}
+    for entry in revised.get("experiences", []):
+        src = by_title.get(entry.get("title"))
+        if not isinstance(entry, dict) or src is None:
+            continue
+        if src.get("subtitle") in known:
+            entry["subtitle"] = src["subtitle"]
+        for key in ("scope", "achievements"):
+            new, old = entry.get(key), src.get(key)
+            if isinstance(new, list) and isinstance(old, list) and len(new) == len(old):
+                entry[key] = [o if o in known else n for n, o in zip(new, old)]
 
 
 def _changed_fields(base: dict, tailored: dict) -> list[str]:
@@ -670,40 +743,29 @@ def _tellcheck(base: dict, tailored: dict, changed: list[str]) -> dict | None:
     """Strip AI tells from the edited fields; returns None if the pass fails."""
     print("   Checking the edits for AI tells...")
     try:
-        response = _get_client().messages.create(
-            model=llm.generation_model("claude-sonnet-4-6"),
-            max_tokens=8192,
-            thinking=llm.tellcheck_thinking(),
+        text = _stream_json(
+            _get_client(),
             system=_TELLCHECK_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Original resume (JSON):\n"
-                        + json.dumps(base, indent=2, ensure_ascii=False)
-                        + "\n\nTailored resume (JSON):\n"
-                        + json.dumps(tailored, indent=2, ensure_ascii=False)
-                        + "\n\nFields the tailor changed: "
-                        + ", ".join(changed)
-                        + "\n\nReturn the tell-checked patch: only these fields."
-                    ),
-                }
-            ],
-            output_config={
-                "format": {
-                    "type": "json_schema",
-                    "schema": _tellcheck_schema(changed, base, tailored),
-                }
-            },
+            user_msg=(
+                "Original resume (JSON):\n"
+                + json.dumps(base, indent=2, ensure_ascii=False)
+                + "\n\nTailored resume (JSON):\n"
+                + json.dumps(tailored, indent=2, ensure_ascii=False)
+                + "\n\nFields the tailor changed: "
+                + ", ".join(changed)
+                + "\n\nLines the tailor edited (the only lines you may rewrite):\n"
+                + "\n".join(f"- {ln}" for ln in _edited_lines(base, tailored, changed))
+                + "\n\nReturn the tell-checked patch: only these fields."
+            ),
+            schema=_tellcheck_schema(changed, base, tailored),
+            thinking=llm.tellcheck_thinking(),
         )
-        if response.stop_reason == "max_tokens":
-            return None
-        text = next(b.text for b in response.content if b.type == "text")
         patch = json.loads(text)
         if any(_has_tells(v, skip_keys=("title", "subtitle")) for v in patch.values()):
             print("   Tell-check reintroduced banned phrasing; keeping the tailored draft.")
             return None
         revised = _apply_patch(tailored, patch)
+        _restore_untouched_lines(base, tailored, revised)
         recall = _fact_recall(tailored, revised, patch)
         if recall < _MIN_FACT_RECALL:
             print(
@@ -715,7 +777,7 @@ def _tellcheck(base: dict, tailored: dict, changed: list[str]) -> dict | None:
         print(f"   Tell-check failed ({e}); using the tailored draft as-is.")
         return None
     # The tell-check must not silently re-touch fields the tailor left alone.
-    for key, value in base.items():
+    for key, value in tailored.items():
         if key not in changed:
             revised[key] = value
     return revised
