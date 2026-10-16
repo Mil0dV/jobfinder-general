@@ -582,9 +582,15 @@ def _stream_response(
                 messages=messages,
             ) as stream:
                 echo.attach(stream)
-                for text in stream.text_stream:  # the draft itself stays silent
+                for text in stream.text_stream:  # shown dimmed; the revision follows
+                    if not draft_parts:
+                        echo.end()
+                        print(f"   {echo._dim}[draft]{echo._reset}")
                     draft_parts.append(text)
+                    print(f"{echo._dim}{text}{echo._reset}", end="", flush=True)
             echo.end()
+            if draft_parts:
+                print("\n")
             draft_text = "".join(draft_parts)
             if draft_text.strip():
                 messages += [
