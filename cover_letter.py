@@ -501,6 +501,31 @@ def _build_job_context(job: dict | None, extra_description: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+class _ThinkingEcho:
+    """Echo the model's reasoning (dimmed) while a stream runs, so you can read along.
+    Only the rig / OpenRouter streams expose it; the Anthropic SDK stream is left alone."""
+
+    def __init__(self):
+        self.shown = False
+        self._dim, self._reset = ("\033[2m", "\033[0m") if sys.stdout.isatty() else ("", "")
+
+    def attach(self, stream):
+        if hasattr(stream, "on_reasoning"):
+            stream.on_reasoning = self._on_reasoning
+
+    def _on_reasoning(self, chunk: str):
+        if not self.shown:
+            print(f"   {self._dim}[thinking]{self._reset}")
+            self.shown = True
+        print(f"{self._dim}{chunk}{self._reset}", end="", flush=True)
+
+    def end(self):
+        """Call when visible output starts (or the stream ends): close the thinking block."""
+        if self.shown:
+            print("\n")
+            self.shown = False
+
+
 def _stream_response(
     system_prompt: str,
     user_prompt: str,
@@ -530,6 +555,7 @@ def _stream_response(
 
     try:
         if revise_instruction is None:
+            echo = _ThinkingEcho()
             with client.messages.stream(
                 model=llm.generation_model("claude-opus-4-7"),
                 max_tokens=1024,
@@ -537,20 +563,29 @@ def _stream_response(
                 system=system,
                 messages=messages,
             ) as stream:
+                echo.attach(stream)
                 for text in stream.text_stream:
+                    echo.end()
                     full_text += text
                     print(text, end="", flush=True)
+                echo.end()
         else:
             draft_model = llm.generation_model("claude-opus-4-7")
             print("   Drafting with " + llm.describe_model(draft_model), flush=True)
-            draft = client.messages.create(
+            echo = _ThinkingEcho()
+            draft_parts = []
+            with client.messages.stream(
                 model=draft_model,
                 max_tokens=1024,
                 thinking=llm.generation_thinking(),
                 system=system,
                 messages=messages,
-            )
-            draft_text = "".join(b.text for b in draft.content if b.type == "text")
+            ) as stream:
+                echo.attach(stream)
+                for text in stream.text_stream:  # the draft itself stays silent
+                    draft_parts.append(text)
+            echo.end()
+            draft_text = "".join(draft_parts)
             if draft_text.strip():
                 messages += [
                     {"role": "assistant", "content": draft_text},
@@ -573,9 +608,12 @@ def _stream_response(
                 system=system,
                 messages=messages,
             ) as stream:
+                echo.attach(stream)
                 for text in stream.text_stream:
+                    echo.end()
                     full_text += text
                     print(text, end="", flush=True)
+                echo.end()
 
     except llm.AuthError:
         print(f"\nError: Invalid {llm.api_key_env()}. Check your .env file.")
