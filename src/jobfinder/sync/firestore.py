@@ -35,9 +35,11 @@ import time
 
 from dotenv import load_dotenv
 
+from jobfinder.config.paths import PROJECT_ROOT
+
 load_dotenv()
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 DECISIONS_FILE = os.path.join(_project_root, "job_decisions.json")
 REPLIES_FILE = os.path.join(_project_root, "job_replies.json")
 
@@ -566,7 +568,7 @@ def sync_up(verbose: bool = False) -> bool:
     if not sync:
         return False
     try:
-        from cover_letter import load_jobs_from_csv
+        from jobfinder.documents.cover_letter import load_jobs_from_csv
 
         remote_keys = sync.remote_job_keys()
         missing = [j for j in load_jobs_from_csv() if job_key(j) not in remote_keys]

@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-import tui
+import jobfinder.ui.tui as tui
 
 
 @pytest.fixture()

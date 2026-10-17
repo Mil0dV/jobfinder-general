@@ -2,8 +2,8 @@
 to the new company|title-first identity (sync.norm_key). Run once after the
 identity change. Idempotent — re-running is a no-op.
 
-    uv run python migrate_decision_keys.py          # dry run: report only
-    uv run python migrate_decision_keys.py --apply   # rewrite file + push to Firestore
+    uv run python -m jobfinder.migrations.migrate_decision_keys          # dry run: report only
+    uv run python -m jobfinder.migrations.migrate_decision_keys --apply   # rewrite file + push to Firestore
 
 Existing Firestore decision docs keyed by the old id are left in place; they
 become harmless orphans (no job's new identity matches them). Only local
@@ -14,9 +14,10 @@ import json
 import os
 import sys
 
-from sync import norm_key
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.sync.firestore import norm_key
 
-DECISIONS = os.path.join(os.path.dirname(__file__), "job_decisions.json")
+DECISIONS = os.path.join(PROJECT_ROOT, "job_decisions.json")
 
 
 def remap(old: dict) -> tuple[dict, int, int]:
@@ -60,7 +61,7 @@ def main() -> None:
         json.dump(new, f, indent=2, ensure_ascii=False)
     print("Rewrote job_decisions.json.")
 
-    from sync import get_sync, sync_up
+    from jobfinder.sync.firestore import get_sync, sync_up
 
     s = get_sync()
     if not s:

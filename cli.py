@@ -13,7 +13,7 @@ import sys
 import time
 from dataclasses import dataclass
 from agent import root_agent, run_profile_search
-from cover_letter import (
+from jobfinder.documents.cover_letter import (
     parse_command,
     list_jobs_brief,
     load_jobs_from_csv,
@@ -25,7 +25,7 @@ from cover_letter import (
     extract_job_meta,
     make_output_stem,
 )
-from resume_tailor import tailor_resume
+from jobfinder.documents.resume_tailor import tailor_resume
 
 
 def run_search(job_title: str, location: str, job_type: str, experience: str):
@@ -401,8 +401,8 @@ def _cmd_applied(args, ctx):
     if r is None:
         return
     job, url, role_desc = r[0], r[1], r[2]
-    from tui import _push_decision, job_key, load_decisions, save_decisions
-    from sync import norm_key
+    from jobfinder.ui.tui import _push_decision, job_key, load_decisions, save_decisions
+    from jobfinder.sync.firestore import norm_key
 
     if job:
         company, title = job.get("company", ""), job.get("title", "")
@@ -444,7 +444,7 @@ def _cmd_inbox(args, ctx):
     Invitations first, then anything the classifier wasn't sure about, then the
     settled outcomes. `inbox all` includes acknowledgements and unrelated mail.
     """
-    from sync import replies_sorted
+    from jobfinder.sync.firestore import replies_sorted
 
     replies = replies_sorted()
     if not replies:
@@ -559,7 +559,7 @@ def _cmd_unset(args, ctx):
 
 def _load_liked_queue(ctx) -> int:
     """Fill ctx.queue with liked-but-not-applied jobs from disk. Returns the count."""
-    from tui import liked_from_csv, load_decisions
+    from jobfinder.ui.tui import liked_from_csv, load_decisions
 
     ctx.queue = _drop_offline(liked_from_csv(load_decisions()))
     ctx.queue_pos = 0
@@ -575,7 +575,7 @@ def _drop_offline(jobs: list) -> list:
     print(f"   Checking that {len(jobs)} liked job(s) are still online...")
     kept, dropped = verify_jobs_online(jobs, check_all=True)
     if dropped:
-        from tui import _push_decision, job_key, load_decisions, record_decision
+        from jobfinder.ui.tui import _push_decision, job_key, load_decisions, record_decision
 
         decisions = load_decisions()
         for j in (j for j in jobs if j not in kept):
@@ -694,7 +694,7 @@ def _cmd_open(args, ctx):
 
 def _cmd_pdf(args, ctx):
     """Redo the docx → pdf conversion (same as `jobfinder -p`)."""
-    from resume_tailor import docx_to_pdf
+    from jobfinder.documents.resume_tailor import docx_to_pdf
 
     path = args.strip().strip("'\"")
     if not path:
@@ -1114,7 +1114,7 @@ def _print_invites_notice():
     """Announce what the phone's inbox scan left for you — interview invites, and
     applications still waiting on a screening question (silent if none)."""
     try:
-        from sync import replies_sorted
+        from jobfinder.sync.firestore import replies_sorted
 
         invites = replies_sorted("invited")
         todo = replies_sorted("action_needed")
@@ -1343,7 +1343,7 @@ def main():
     from candidate_profile import PROFILE_EXISTS
 
     if not PROFILE_EXISTS:
-        from resume_data import RESUME_JSON_PATH, RESUME_SOURCE_CANDIDATES
+        from jobfinder.documents.resume_data import RESUME_JSON_PATH, RESUME_SOURCE_CANDIDATES
 
         has_resume = any(os.path.exists(p) for p in RESUME_SOURCE_CANDIDATES + [RESUME_JSON_PATH])
         if not has_resume:
@@ -1363,7 +1363,7 @@ def main():
 
     # --- TUI: search → swipe → interactive mode over the liked jobs ---
     if args.tui:
-        from tui import run_tui
+        from jobfinder.ui.tui import run_tui
 
         liked = run_tui()
         if liked:
@@ -1372,7 +1372,7 @@ def main():
 
     # --- Docx to PDF conversion ---
     if args.to_pdf is not None:
-        from resume_tailor import docx_to_pdf
+        from jobfinder.documents.resume_tailor import docx_to_pdf
 
         path = args.to_pdf
         if not path:

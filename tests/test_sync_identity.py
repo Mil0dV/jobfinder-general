@@ -3,7 +3,7 @@ import hashlib
 
 import pytest
 
-import sync
+import jobfinder.sync.firestore as sync
 
 
 # --- identity keys ----------------------------------------------------------------

@@ -17,14 +17,15 @@ import os
 import re
 import sys
 
-
-import llm
-from doc_text import extract_text
 from dotenv import load_dotenv
+
+import jobfinder.llm.client as llm
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.documents.doc_text import extract_text
 
 load_dotenv()
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 
 RESUME_DOCX_PATH = os.path.join(_project_root, "Resume_base.docx")
 RESUME_JSON_PATH = os.path.join(_project_root, "resume.json")

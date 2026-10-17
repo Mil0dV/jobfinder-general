@@ -15,7 +15,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from doc_text import SUPPORTED_EXTENSIONS, SUPPORTED_LABEL, extract_text
+from jobfinder.documents.doc_text import SUPPORTED_EXTENSIONS, SUPPORTED_LABEL, extract_text
 
 _project_root = os.path.dirname(os.path.abspath(__file__))
 PROFILE_PATH = os.path.join(_project_root, "profile.json")
@@ -197,7 +197,7 @@ def _yes(prompt: str, default: bool = False) -> bool:
 def _ensure_api_key() -> bool:
     """Make sure the active provider's API key is available, offering to write it to .env."""
     load_dotenv()
-    import llm
+    import jobfinder.llm.client as llm
 
     key_env = llm.api_key_env()
     if llm.api_key():
@@ -221,14 +221,14 @@ def _ensure_api_key() -> bool:
 
 
 def _get_client():
-    import llm
+    import jobfinder.llm.client as llm
 
     return llm.get_client()
 
 
 def _ingest_resume() -> dict | None:
     """Ask for a resume file and import it; returns the parsed resume data."""
-    from resume_data import RESUME_SOURCE_CANDIDATES, import_resume
+    from jobfinder.documents.resume_data import RESUME_SOURCE_CANDIDATES, import_resume
 
     existing = next((p for p in RESUME_SOURCE_CANDIDATES if os.path.exists(p)), None)
     if existing and _yes(f"Found {os.path.basename(existing)} — use it?", default=True):
@@ -437,7 +437,7 @@ def run_setup() -> bool:
     if resume is None:
         return False
 
-    from resume_data import resume_as_text
+    from jobfinder.documents.resume_data import resume_as_text
 
     answers = _ask_preferences(resume)
 

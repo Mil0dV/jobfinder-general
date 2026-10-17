@@ -1424,7 +1424,7 @@ _VALIDATION_SCHEMA = {
 def _get_anthropic_client():
     global _anthropic_client
     if _anthropic_client is None:
-        import llm
+        import jobfinder.llm.client as llm
 
         _anthropic_client = llm.get_client()
     return _anthropic_client
@@ -1441,7 +1441,7 @@ def _dedup_and_filter_stale(jobs: list, seen_keys: set, max_age_days: int) -> li
     def _age(job):
         return _job_age_days(job.get("posted_date", ""))
 
-    from sync import norm_key
+    from jobfinder.sync.firestore import norm_key
 
     fresh = [j for j in jobs if (a := _age(j)) is None or a <= max_age_days]
     by_key: dict[str, dict] = {}
@@ -1522,7 +1522,7 @@ def _salvage_evaluations_json(text: str) -> dict | None:
 
 def _validation_json(prompt: str) -> dict | None:
     """Score a validation batch via the LLM with a JSON-schema-constrained response."""
-    import llm
+    import jobfinder.llm.client as llm
 
     if not llm.api_key():
         return None
@@ -1782,7 +1782,7 @@ def _drop_region_locked(jobs: list, location: str) -> tuple[list, list]:
     A job whose location field already names the searched place is never dropped
     (an on-site Zürich role that mentions US clients is not region-locked).
     """
-    import jev
+    import jobfinder.pipeline.jev as jev
 
     terms = set(_location_terms(location))
     if _is_preferred_location(location):
@@ -1835,7 +1835,7 @@ def fetch_descriptions(jobs: list, _progress=None) -> None:
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    from cover_letter import fetch_job_description
+    from jobfinder.documents.cover_letter import fetch_job_description
 
     to_fetch = [j for j in jobs if (j.get("url") or "").startswith("http") and "_desc" not in j]
     if not to_fetch:
@@ -1917,7 +1917,7 @@ def search_jobs(
     # would later collapse to one job. Stale postings are dropped *before* keys
     # are registered (a poisoned key used to swallow fresh reposts), and same-key
     # variants resolve to the freshest one.
-    from sync import norm_key
+    from jobfinder.sync.firestore import norm_key
 
     seen_keys: set = set()
     unique_jobs = _dedup_and_filter_stale(all_jobs, seen_keys, max_age_days)
@@ -1961,7 +1961,7 @@ def search_jobs(
         return job["fit_score"] >= min_fit and job["climate_score"] >= min_climate
 
     # Jev: typed fit/startup/climate scores + region-lock check on the full description.
-    import jev
+    import jobfinder.pipeline.jev as jev
 
     if jev.enabled():
         region = (
@@ -2083,7 +2083,7 @@ def save_jobs(jobs: list, filepath: str = "jobs.csv", _push: bool = True) -> dic
         except FileNotFoundError:
             pass
 
-        from sync import norm_key
+        from jobfinder.sync.firestore import norm_key
 
         def ident(j):
             return norm_key(j.get("url", ""), j.get("company", ""), j.get("title", ""))
@@ -2121,7 +2121,7 @@ def save_jobs(jobs: list, filepath: str = "jobs.csv", _push: bool = True) -> dic
 
         if _push:
             try:
-                from sync import push_jobs_async
+                from jobfinder.sync.firestore import push_jobs_async
 
                 push_jobs_async(new_rows)
             except Exception:
@@ -2198,7 +2198,7 @@ def get_company_info(company_name: str) -> dict:
 def run_profile_search(location: str = "", query: str = "", non_climate: bool = False) -> None:
     """Deterministic search + save, no agent loop. Used by `cli.py --profile`."""
     try:
-        from sync import sync_down, sync_up
+        from jobfinder.sync.firestore import sync_down, sync_up
 
         sync_down(verbose=True)
         # Flush any decisions/jobs a prior session's async push never sent.
@@ -2234,7 +2234,7 @@ def run_connection_search(location: str = "", query: str = "") -> None:
     from connections import search_connections
 
     try:
-        from sync import sync_down, sync_up
+        from jobfinder.sync.firestore import sync_down, sync_up
 
         sync_down(verbose=True)
         sync_up(verbose=True)
@@ -2269,7 +2269,7 @@ class ClaudeAgent:
     """Manual tool-use loop against the Anthropic Messages API."""
 
     def __init__(self, model="claude-sonnet-5", tools=None, system_prompt=""):
-        import llm
+        import jobfinder.llm.client as llm
 
         if not llm.api_key():
             print(f"⚠️ WARNING: {llm.api_key_env()} not found in environment.")

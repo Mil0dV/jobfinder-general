@@ -11,9 +11,9 @@ pushing the corrected rows overwrites the existing Firestore docs in place —
 that's what fixes the URL for the Android app / other synced devices, since a
 plain `sync_up()` only pushes keys the remote DB doesn't already have.
 
-    uv run python migrate_apply_urls.py                  # dry run: report only
-    uv run python migrate_apply_urls.py --apply           # rewrite jobs.csv
-    uv run python migrate_apply_urls.py --apply --push    # + push fixed rows to Firestore
+    uv run python -m jobfinder.migrations.migrate_apply_urls                  # dry run: report only
+    uv run python -m jobfinder.migrations.migrate_apply_urls --apply           # rewrite jobs.csv
+    uv run python -m jobfinder.migrations.migrate_apply_urls --apply --push    # + push fixed rows to Firestore
 """
 
 import csv
@@ -56,7 +56,7 @@ def main() -> None:
     if not push or not changed_rows:
         return
 
-    from sync import get_sync
+    from jobfinder.sync.firestore import get_sync
 
     s = get_sync()
     if not s:

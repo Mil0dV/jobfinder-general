@@ -285,7 +285,7 @@ def classify_companies(grouped: dict, verbose: bool = True) -> dict:
     Returns {key: {"display", "climate", "note"}}. Without an LLM, every company
     gets climate=MIN_CLIMATE so the search still runs (nothing is pre-filtered).
     """
-    import llm
+    import jobfinder.llm.client as llm
 
     cache = _load_cache(COMPANIES_CACHE)
     todo = [(k, v["display"]) for k, v in grouped.items() if k not in cache]
@@ -658,7 +658,7 @@ def _scrape_careers_page(url: str, query: str) -> list:
 
     # JS-only page: extracted text + one cheap LLM pass.
     try:
-        from cover_letter import fetch_job_description
+        from jobfinder.documents.cover_letter import fetch_job_description
 
         text = fetch_job_description(url)
     except Exception:

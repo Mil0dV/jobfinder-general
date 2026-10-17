@@ -18,13 +18,13 @@ import threading
 import time
 
 import trafilatura
-
-import llm
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv
 
-from resume_data import candidate_name, resume_as_text
+import jobfinder.llm.client as llm
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.documents.resume_data import candidate_name, resume_as_text
 
 load_dotenv()
 
@@ -50,7 +50,7 @@ def _get_anthropic_client():
 # Context loading
 # ---------------------------------------------------------------------------
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 
 
 def _load_text_file(filename: str) -> str:
@@ -243,7 +243,7 @@ def fetch_job_description(url: str, use_cache: bool = True) -> str:
 
     text = ""
     try:
-        from sync import get_remote_description
+        from jobfinder.sync.firestore import get_remote_description
 
         text = get_remote_description(url) or ""
     except Exception:
@@ -272,7 +272,7 @@ def fetch_job_description(url: str, use_cache: bool = True) -> str:
                 json.dump(cache, f, indent=2, ensure_ascii=False)
         if text and fetched_here:
             try:
-                from sync import push_description_async
+                from jobfinder.sync.firestore import push_description_async
 
                 push_description_async(url, text)
             except Exception:
