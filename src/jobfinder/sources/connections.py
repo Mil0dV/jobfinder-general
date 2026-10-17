@@ -14,30 +14,25 @@ Four stages, each disk-cached so the slow first run happens only once:
                            (connections_boards.json, with a TTL).
 
 ``search_connections`` has the same ``(query, location)`` signature as every
-other source in ``agent.ALL_SOURCES``, so the usual pipeline (dedup, liveness,
+other source in ``pipeline.search.ALL_SOURCES``, so the usual pipeline (dedup, liveness,
 description fetch, LLM validation, ranking) applies unchanged.
 """
 
-import os
-import re
 import csv
 import json
-import time
+import os
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from agent import (
-    _get_anthropic_client,
-    _make_job,
-    _matches_location,
-    _location_terms,
-    _strip_apply_suffix,
-    _title_matches,
-    VALIDATION_MODEL,
-)
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.pipeline.validate import VALIDATION_MODEL, _get_anthropic_client
+from jobfinder.sources.base import _location_terms, _make_job, _matches_location, _title_matches
+from jobfinder.sources.climatebase import _strip_apply_suffix
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(PROJECT_ROOT)
 CONNECTIONS_CSV = os.path.join(BASE_DIR, "connections.csv")
 COMPANIES_CACHE = os.path.join(BASE_DIR, "connections_companies.json")
 BOARDS_CACHE = os.path.join(BASE_DIR, "connections_boards.json")
@@ -285,7 +280,7 @@ def classify_companies(grouped: dict, verbose: bool = True) -> dict:
     Returns {key: {"display", "climate", "note"}}. Without an LLM, every company
     gets climate=MIN_CLIMATE so the search still runs (nothing is pre-filtered).
     """
-    import llm
+    import jobfinder.llm.client as llm
 
     cache = _load_cache(COMPANIES_CACHE)
     todo = [(k, v["display"]) for k, v in grouped.items() if k not in cache]
@@ -630,8 +625,9 @@ def _scrape_careers_page(url: str, query: str) -> list:
     back to the extracted page text and let the fast model list the openings —
     those get the careers-page URL, which is the best link available.
     """
-    import requests
     from urllib.parse import urljoin
+
+    import requests
 
     html = ""
     try:
@@ -658,7 +654,7 @@ def _scrape_careers_page(url: str, query: str) -> list:
 
     # JS-only page: extracted text + one cheap LLM pass.
     try:
-        from cover_letter import fetch_job_description
+        from jobfinder.documents.cover_letter import fetch_job_description
 
         text = fetch_job_description(url)
     except Exception:

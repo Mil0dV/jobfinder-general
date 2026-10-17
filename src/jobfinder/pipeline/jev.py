@@ -2,7 +2,7 @@
 
 Jev is a "System One" model: one POST carries a state plus named questions
 (Score / Noul / Choice) and returns calibrated probabilities, no text generation.
-Used by `agent.search_jobs`, all in one request per job (questions run in parallel):
+Used by `pipeline.search.search_jobs`, all in one request per job (questions run in parallel):
 
 - **fit** (0–5): role match against the candidate profile and `FIT_RUBRIC`.
 - **startup** (0–5): how scrappy vs. bureaucratic the company reads.
@@ -22,7 +22,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
-from candidate_profile import CANDIDATE_PROFILE, FIT_RUBRIC
+from jobfinder.config.profile import CANDIDATE_PROFILE, FIT_RUBRIC
 
 load_dotenv()
 

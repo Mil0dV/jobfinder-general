@@ -13,19 +13,20 @@ import sys
 from io import BytesIO
 
 import trafilatura
-
-import llm
-from cover_letter import extract_job_meta, make_output_stem
-from resume_data import RESUME_DOCX_PATH, get_resume_data
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv
 
+import jobfinder.llm.client as llm
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.documents.cover_letter import extract_job_meta, make_output_stem
+from jobfinder.documents.resume_data import RESUME_DOCX_PATH, get_resume_data
+
 load_dotenv()
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 
 # ---------------------------------------------------------------------------
 # Anthropic client
@@ -323,7 +324,7 @@ def build_resume_docx(data: dict, output_path: str, photo_src: str | None = None
 
 
 def _load_style_guide() -> str:
-    from cover_letter import _load_style_guide as _cl_style_guide
+    from jobfinder.documents.cover_letter import _load_style_guide as _cl_style_guide
 
     return _cl_style_guide()
 

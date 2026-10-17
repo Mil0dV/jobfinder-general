@@ -35,9 +35,11 @@ import time
 
 from dotenv import load_dotenv
 
+from jobfinder.config.paths import PROJECT_ROOT
+
 load_dotenv()
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 DECISIONS_FILE = os.path.join(_project_root, "job_decisions.json")
 REPLIES_FILE = os.path.join(_project_root, "job_replies.json")
 
@@ -107,7 +109,7 @@ def _ts_rank(ts) -> str:
     try:
         from zoneinfo import ZoneInfo
 
-        from candidate_profile import TIMEZONE
+        from jobfinder.config.profile import TIMEZONE
     except Exception:
         ZoneInfo, TIMEZONE = None, None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
@@ -533,7 +535,7 @@ def sync_down(verbose: bool = False) -> bool:
             _save_local_decisions(local)
 
         # Jobs: append remote rows jobs.csv doesn't know (save_jobs dedupes by URL).
-        from agent import save_jobs
+        from jobfinder.pipeline.store import save_jobs
 
         remote_jobs = sync.pull_jobs()
         result = save_jobs(remote_jobs, _push=False) if remote_jobs else {"added": 0}
@@ -566,7 +568,7 @@ def sync_up(verbose: bool = False) -> bool:
     if not sync:
         return False
     try:
-        from cover_letter import load_jobs_from_csv
+        from jobfinder.documents.cover_letter import load_jobs_from_csv
 
         remote_keys = sync.remote_job_keys()
         missing = [j for j in load_jobs_from_csv() if job_key(j) not in remote_keys]

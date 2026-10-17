@@ -14,8 +14,11 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-PROFILE_DIR = Path(os.getenv("WTTJ_PROFILE_DIR", ".jobfinder_wttj_profile"))
-CAPTURE_FILE = Path(".jobfinder_wttj_capture.jsonl")
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.sources.base import _location_terms, _make_job, _matches_location, _title_matches
+
+PROFILE_DIR = Path(os.getenv("WTTJ_PROFILE_DIR") or PROJECT_ROOT / ".jobfinder_wttj_profile")
+CAPTURE_FILE = PROJECT_ROOT / ".jobfinder_wttj_capture.jsonl"
 APP_URL = "https://app.welcometothejungle.com/jobs"
 _STATIC_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".woff", ".woff2")
 _NOISE_HOSTS = ("google", "gstatic", "doubleclick", "segment", "sentry", "datadog", "amplitude")
@@ -53,7 +56,8 @@ def _log_response(response, out):
         return
     entry = {
         "method": req.method,
-        "url": f"{parts.scheme}://{parts.netloc}{parts.path}" + (f"?{parts.query}" if parts.query else ""),
+        "url": f"{parts.scheme}://{parts.netloc}{parts.path}"
+        + (f"?{parts.query}" if parts.query else ""),
         "status": response.status,
         "request_body": (req.post_data or "")[:20000] or None,
     }
@@ -97,7 +101,10 @@ def login(capture: bool = True) -> None:
             pass
         if out:
             out.close()
-    print(f"Session saved in {PROFILE_DIR}/" + (f"; API calls logged to {CAPTURE_FILE}" if capture else ""))
+    print(
+        f"Session saved in {PROFILE_DIR}/"
+        + (f"; API calls logged to {CAPTURE_FILE}" if capture else "")
+    )
 
 
 _GQL = "https://api.exp.welcometothejungle.com/graphql"
@@ -161,6 +168,59 @@ def fetch_jobs() -> list[dict]:
             return jobs
         finally:
             ctx.close()
+
+
+def search_wttj(query: str, location: str = "") -> list:
+    """Welcome to the Jungle recommendations — optional, needs `cli.py --login-wttj` once.
+
+    A personalized queue (~90 roles), not a searchable board; silently skipped when there is
+    no saved login or Playwright. See wttj.py.
+    """
+    if not session_available():
+        return []
+    try:
+        terms = _location_terms(location)
+        jobs = []
+        for j in fetch_jobs():
+            title = (j.get("title") or "").strip()
+            if not title or not _title_matches(title, query):
+                continue
+            places = [p["name"] for p in j.get("formattedLocationPreferences") or []]
+            if j.get("officeLocation"):
+                places.insert(0, str(j["officeLocation"]))
+            job_location = "; ".join(dict.fromkeys(places))
+            if j.get("remoteOnly") and "remote" not in job_location.lower():
+                job_location = ("Remote — " + job_location) if job_location else "Remote"
+            if not _matches_location(job_location, terms):
+                continue
+            sal = j.get("salaryRange") or {}
+            salary = ""
+            if sal.get("minAmount") or sal.get("maxAmount"):
+                lo, hi = (
+                    int(float(sal[k])) if sal.get(k) else None for k in ("minAmount", "maxAmount")
+                )
+                span = f"{lo:,}–{hi:,}" if lo and hi else f"{(lo or hi):,}"
+                salary = f"{span} {sal.get('currency') or ''}".strip()
+            bullets = [b["value"] for b in j.get("involvesBullets") or []]
+            jobs.append(
+                _make_job(
+                    title=title,
+                    company=(j.get("company") or {}).get("name"),
+                    url=j.get("originalUrl")
+                    or f"https://app.welcometothejungle.com/jobs/{j['externalId']}",
+                    location=job_location or "See posting",
+                    salary=salary,
+                    posted_date="",  # insertedAt is first-seen (often years old), not freshness
+                    wfh_policy="Remote" if j.get("remoteOnly") else "Unknown",
+                    snippet=" ".join(bullets),
+                    source="wttj",
+                )
+            )
+        print(f"   WTTJ: {len(jobs)} matching jobs")
+        return jobs
+    except Exception as e:
+        print(f"   WTTJ error: {e}")
+        return []
 
 
 if __name__ == "__main__":

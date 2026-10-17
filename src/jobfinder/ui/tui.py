@@ -21,20 +21,16 @@ import time
 import tty
 from contextlib import contextmanager
 
-from agent import (
-    ALL_SOURCES,
-    PREFERRED_LOCATION,
-    PROFILE_QUERY,
-    home_policy_summary,
-    get_company_info,
-    save_jobs,
-    search_jobs,
-)
-from candidate_profile import is_pearl
+from jobfinder.agent.tools import get_company_info
+from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.config.profile import is_pearl
+from jobfinder.pipeline.search import ALL_SOURCES, search_jobs
+from jobfinder.pipeline.store import save_jobs
+from jobfinder.sources.base import PREFERRED_LOCATION, PROFILE_QUERY, home_policy_summary
 
 _SOURCE_NAMES = [fn.__name__.removeprefix("search_") for fn in ALL_SOURCES]
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(PROJECT_ROOT)
 STATE_FILE = os.path.join(BASE_DIR, ".jobfinder_tui.json")
 DECISIONS_FILE = os.path.join(BASE_DIR, "job_decisions.json")
 
@@ -94,7 +90,7 @@ def norm_url(u: str) -> str:
 def job_key(job) -> str:
     """A job/row's cross-device identity (company|title, URL fallback). The one
     key used for swipe decisions, sync doc ids and dedup — see sync.norm_key."""
-    from sync import norm_key
+    from jobfinder.sync.firestore import norm_key
 
     return norm_key(job.get("url", ""), job.get("company", ""), job.get("title", ""))
 
@@ -102,7 +98,7 @@ def job_key(job) -> str:
 def load_decisions() -> dict:
     # Tombstones (delete markers that make cross-device removals converge) are
     # sync plumbing — the UI and shell only ever see real swipes.
-    from sync import _filter_tombstones
+    from jobfinder.sync.firestore import _filter_tombstones
 
     return _filter_tombstones(_load_json(DECISIONS_FILE, {}))
 
@@ -110,7 +106,7 @@ def load_decisions() -> dict:
 def _push_decision(key, record):
     """Best-effort cross-device push of one swipe (record=None on undo)."""
     try:
-        from sync import push_decision_async
+        from jobfinder.sync.firestore import push_decision_async
 
         push_decision_async(key, record)
     except Exception:
@@ -130,7 +126,7 @@ def record_decision(decisions: dict, key: str, record) -> None:
     result into the live dict. Re-reading first keeps a parallel TUI session's
     swipes from being clobbered by this session's stale copy."""
     merged = _load_json(DECISIONS_FILE, {})  # unfiltered: tombstones must survive the rewrite
-    from sync import tombstone, _filter_tombstones
+    from jobfinder.sync.firestore import _filter_tombstones, tombstone
 
     if record is None:
         merged[key] = tombstone()
@@ -513,7 +509,7 @@ def search_screen(term, query, location, sources=None, non_climate=False):
 def _attach_csv_numbers(jobs):
     """Attach jobs.csv row numbers so the interactive shell's `cl <n>` etc. line up."""
     try:
-        from cover_letter import load_jobs_from_csv
+        from jobfinder.documents.cover_letter import load_jobs_from_csv
 
         num_by_url = {norm_url(row.get("url")): i for i, row in enumerate(load_jobs_from_csv(), 1)}
         for job in jobs:
@@ -545,7 +541,7 @@ def _lazy_fetch(job, kind):
             if kind == "desc":
                 text = ""
                 if job.get("url"):
-                    from cover_letter import fetch_job_description
+                    from jobfinder.documents.cover_letter import fetch_job_description
 
                     text = fetch_job_description(job["url"]) or ""
                 job[key] = text or job.get("snippet") or "(no description available)"
@@ -771,7 +767,7 @@ def swipe_screen(term, deck, decisions):
             )
         elif key == "a":
             with term.suspend():
-                from cli import _run_interactive
+                from jobfinder.cli import _run_interactive
 
                 try:
                     _run_interactive(initial_job=job)
@@ -852,7 +848,7 @@ def _undecided_from_csv(decisions, general=False):
     so the review deck opens instantly.
     """
     try:
-        from cover_letter import load_jobs_from_csv
+        from jobfinder.documents.cover_letter import load_jobs_from_csv
 
         rows = load_jobs_from_csv()
     except Exception:
@@ -874,7 +870,7 @@ def liked_from_csv(decisions) -> list:
     fallback, so yesterday's right-swipes are still actionable today.
     """
     try:
-        from cover_letter import load_jobs_from_csv
+        from jobfinder.documents.cover_letter import load_jobs_from_csv
 
         rows = load_jobs_from_csv()
     except Exception:
@@ -895,7 +891,7 @@ def _invites_waiting() -> int:
     """What the phone's inbox scan found and left for you — interview invites plus
     applications stuck waiting on a screening question. 0 when sync is off."""
     try:
-        from sync import waiting_count
+        from jobfinder.sync.firestore import waiting_count
 
         return waiting_count()
     except Exception:
@@ -909,7 +905,7 @@ def replies_screen(term):
     this just renders what sync pulled down.
     """
     try:
-        from sync import replies_sorted
+        from jobfinder.sync.firestore import replies_sorted
 
         replies = replies_sorted()
     except Exception:
@@ -979,7 +975,7 @@ def run_tui():
 
     def _background_sync():
         try:
-            from sync import sync_down, sync_up
+            from jobfinder.sync.firestore import sync_down, sync_up
 
             sync_down()  # pull the other devices' jobs + swipes
             # Flush anything a prior session's fire-and-forget push_decision_async
@@ -1085,7 +1081,7 @@ def run_tui():
                     continue
                 query = role
             if choice == 2:  # companies where you know someone
-                from connections import CONNECTIONS_CSV, search_connections
+                from jobfinder.sources.connections import CONNECTIONS_CSV, search_connections
 
                 if not os.path.exists(CONNECTIONS_CSV):
                     cols = term.size()[0]
