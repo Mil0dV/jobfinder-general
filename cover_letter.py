@@ -97,30 +97,89 @@ def _language_instruction() -> str:
     )
 
 
-def _ensure_signoff(text: str) -> str:
-    """Cover letters must always end with the canonical closing. It only ever
-    came from the style-guide examples, and models (especially unthinking ones)
-    sometimes drop or invent it. Strip whatever closing the model produced —
-    trailing salutation lines, a bare name line, or an inline "Regards, <name>"
-    tail — and append the canonical one."""
-    name = _candidate_name()
-    lines = text.rstrip().split("\n")
-    close = re.compile(
-        r"^\s*(?:best|kind|warm|many)?\s*(?:regards|cheers|thanks|sincerely|yours|"
-        r"groeten|groetjes|met vriendelijke groet|alles goede)\b[^.]*[,.]?\s*$",
-        re.IGNORECASE,
+def _is_frame_line(line: str) -> bool:
+    """A greeting/closing line: a few words ending in a comma ("LS,", "Kind regards,")."""
+    line = line.strip()
+    return 0 < len(line) <= 30 and len(line.split()) <= 4 and line.endswith(",")
+
+
+def _letter_frame() -> tuple[str, str]:
+    """(greeting, closing) learned from the style guide's example letters — the most
+    common short comma line before a paragraph is the greeting, the most common one
+    after a paragraph is the closing. Nothing is assumed about language or wording;
+    ("", "") when the guide has no examples that show one."""
+    from collections import Counter
+
+    lines = [ln.strip() for ln in _load_style_guide().split("\n") if ln.strip()]
+    greetings: Counter = Counter()
+    closings: Counter = Counter()
+    for i, ln in enumerate(lines):
+        if not _is_frame_line(ln) or i + 1 >= len(lines):
+            continue
+        before = lines[i - 1] if i else ""
+        if len(lines[i + 1]) > 40 and len(before) > 40:
+            closings[ln] += 1  # ends a paragraph, next letter starts right after
+        elif len(lines[i + 1]) > 40:
+            greetings[ln] += 1
+        elif len(before) > 40:
+            closings[ln] += 1
+    # A closing at the very end of a letter is followed by a greeting or a rule.
+    greeting = greetings.most_common(1)[0][0] if greetings else ""
+    closing = closings.most_common(1)[0][0] if closings else ""
+    return greeting, closing
+
+
+def _frame_rule() -> str:
+    """Prompt line telling the model the letter is framed for it: it writes the body only."""
+    greeting, closing = _letter_frame()
+    parts = []
+    if greeting:
+        parts.append(f'start with the greeting line "{greeting}" exactly as the examples do')
+    parts.append(
+        "stop after the last sentence of the body: no closing line and no name, they are added for you"
     )
+    text = "; ".join(parts)
+    return f"- {text[0].upper()}{text[1:]}."
+
+
+def _ensure_frame(text: str) -> str:
+    """Make the letter sendable as is: the greeting and closing come from the style
+    guide's examples (see _letter_frame), not from the model, which (especially an
+    unthinking one) drops the greeting or stacks closings. Any trailing closing the
+    model produced — closing lines, a bare name, an inline "..., <name>" tail — is
+    stripped and the canonical one appended; a greeting is prepended only when the
+    letter doesn't already open with one."""
+    name = _candidate_name()
+    greeting, closing = _letter_frame()
+    closing = closing or "Regards,"
+    lines = text.strip().split("\n")
     name_line = re.compile(rf"^\s*{re.escape(name)}[.,\s]*$", re.IGNORECASE)
-    while len(lines) > 1 and (close.match(lines[-1]) or name_line.match(lines[-1])):
+
+    def _signature(i: int) -> bool:  # a short unpunctuated line right under a closing line
+        prev = next((ln for ln in reversed(lines[:i]) if ln.strip()), "")
+        last = lines[i].strip()
+        return (
+            _is_frame_line(prev) and len(last.split()) <= 4 and not last.endswith((".", "!", "?"))
+        )
+
+    while len(lines) > 1 and (
+        not lines[-1].strip()
+        or _is_frame_line(lines[-1])
+        or name_line.match(lines[-1])
+        or _signature(len(lines) - 1)
+    ):
         lines.pop()
     body = "\n".join(lines).rstrip()
     body = re.sub(
-        rf"[.,\s]*(?:kind |best |warm )?regards,?\s+{re.escape(name)}\s*$",
+        rf"(?<=[.!?])\s+(?:[\w'-]+\s+){{0,2}}[\w'-]+,\s+{re.escape(name)}\s*$",
         "",
         body,
         flags=re.IGNORECASE,
     ).rstrip()
-    return f"{body}\n\nRegards,\n{name}"
+    first = body.split("\n", 1)[0]
+    if greeting and not _is_frame_line(first):
+        body = f"{greeting}\n\n{body}"
+    return f"{body}\n\n{closing}\n{name}"
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +392,7 @@ RULES:
 - 150-220 words. Short paragraphs.
 - Only draw from the resume. Never fabricate experience.
 - End simply: "I look forward to expanding on this in an interview."
+{_frame_rule()}
 """
 
 
@@ -448,6 +508,7 @@ RULES:
 - Only draw from the resume. Never fabricate experience. Drunk delivery, true content.
 - The usual closer ("I look forward to expanding on this in an interview.") may be kept, bent, or
   dropped. A drunk letter can end mid-gesture.
+{_frame_rule()}
 """
 
 
@@ -831,9 +892,9 @@ def generate_cover_letter(
         # The canonical closing is English-only; the model already closed in-language.
         _save_cover_letter_pdf(text, make_output_stem("CL", company, title))
     elif text:
-        signed = _ensure_signoff(text)
+        signed = _ensure_frame(text)
         if signed.strip() != text.strip():
-            print(f"\nRegards,\n{_candidate_name()}")
+            print(f"   Saved with greeting/closing normalized:\n\n{signed}\n")
         _save_cover_letter_pdf(signed, make_output_stem("CL", company, title))
 
 
