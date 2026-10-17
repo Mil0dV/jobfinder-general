@@ -18,26 +18,27 @@ other source in ``agent.ALL_SOURCES``, so the usual pipeline (dedup, liveness,
 description fetch, LLM validation, ranking) applies unchanged.
 """
 
-import os
-import re
 import csv
 import json
-import time
+import os
+import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from agent import (
+    VALIDATION_MODEL,
     _get_anthropic_client,
+    _location_terms,
     _make_job,
     _matches_location,
-    _location_terms,
     _strip_apply_suffix,
     _title_matches,
-    VALIDATION_MODEL,
 )
+from jobfinder.config.paths import PROJECT_ROOT
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(PROJECT_ROOT)
 CONNECTIONS_CSV = os.path.join(BASE_DIR, "connections.csv")
 COMPANIES_CACHE = os.path.join(BASE_DIR, "connections_companies.json")
 BOARDS_CACHE = os.path.join(BASE_DIR, "connections_boards.json")
@@ -630,8 +631,9 @@ def _scrape_careers_page(url: str, query: str) -> list:
     back to the extracted page text and let the fast model list the openings —
     those get the careers-page URL, which is the best link available.
     """
-    import requests
     from urllib.parse import urljoin
+
+    import requests
 
     html = ""
     try:

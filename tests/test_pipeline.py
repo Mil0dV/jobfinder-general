@@ -127,7 +127,7 @@ def test_ch_and_nl_behaviour_unchanged():
 # --- location policy is profile-driven ------------------------------------------------
 
 def _with_home(monkeypatch, entries):
-    import candidate_profile
+    import jobfinder.config.profile as candidate_profile
 
     monkeypatch.setattr(agent, "HOME_COUNTRIES", candidate_profile._normalize_home_countries(entries))
 
@@ -170,7 +170,7 @@ def test_default_policy_matches_original_countries():
 
 
 def test_bad_home_entries_are_skipped_or_defaulted():
-    import candidate_profile
+    import jobfinder.config.profile as candidate_profile
 
     out = candidate_profile._normalize_home_countries(
         [{"country": ""}, "junk", {"country": "Spain", "mode": "nonsense"}]

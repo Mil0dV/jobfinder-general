@@ -12,9 +12,11 @@ import os
 import re
 import sys
 
+from jobfinder.config.paths import PROJECT_ROOT
+
 _PROFILE_PATH = os.environ.get(
     "JOBFINDER_PROFILE",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "profile.json"),
+    os.path.join(PROJECT_ROOT, "profile.json"),
 )
 
 # --- Built-in defaults (the original hardcoded profile) --------------------

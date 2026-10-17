@@ -13,7 +13,7 @@ import inspect
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
-from candidate_profile import (
+from jobfinder.config.profile import (
     ADZUNA_COUNTRIES,
     ADZUNA_DEFAULT,
     CANDIDATE_PROFILE,
@@ -1201,7 +1201,7 @@ def search_wttj(query: str, location: str = "") -> list:
     A personalized queue (~90 roles), not a searchable board; silently skipped when there is
     no saved login or Playwright. See wttj.py.
     """
-    import wttj
+    import jobfinder.sources.wttj as wttj
 
     if not wttj.session_available():
         return []
@@ -2005,7 +2005,7 @@ def search_jobs(
             if _progress:
                 _progress("validate", i, len(batches), f"{len(validated)} kept")
 
-    from candidate_profile import is_pearl
+    from jobfinder.config.profile import is_pearl
 
     def rank(j):
         return (
@@ -2213,7 +2213,7 @@ def run_profile_search(location: str = "", query: str = "", non_climate: bool = 
         f"({saved.get('skipped', 0)} already known) → jobs.csv"
     )
     if jobs:
-        from candidate_profile import is_pearl
+        from jobfinder.config.profile import is_pearl
 
         print("\nTop matches (fit/startup/climate):")
         for j in jobs[:15]:
@@ -2231,7 +2231,7 @@ def run_connection_search(location: str = "", query: str = "") -> None:
     Same deterministic shape as run_profile_search, but the only source is
     connections.search_connections (see connections.py).
     """
-    from connections import search_connections
+    from jobfinder.sources.connections import search_connections
 
     try:
         from jobfinder.sync.firestore import sync_down, sync_up

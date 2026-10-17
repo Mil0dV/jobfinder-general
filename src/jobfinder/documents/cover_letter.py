@@ -82,7 +82,7 @@ def _candidate_name() -> str:
 
 def _language_instruction() -> str:
     """Extra user-prompt line for non-English cover letters ("" for English)."""
-    from candidate_profile import COVER_LETTER_LANGUAGE as lang
+    from jobfinder.config.profile import COVER_LETTER_LANGUAGE as lang
 
     if lang.lower() in ("", "english"):
         return ""
@@ -814,7 +814,7 @@ def generate_cover_letter(
     if company and company.lower() != "unknown":
         header += f" @ {company}"
     if drunk:
-        from candidate_profile import is_pearl
+        from jobfinder.config.profile import is_pearl
 
         header += "   🦪 pearl · drunk draft" if job and is_pearl(job) else "   🍸 drunk draft"
         text = _stream_response(
@@ -852,7 +852,7 @@ def estimate_salary(job: dict | None = None, url: str = "", description: str = "
         print("Error: No job context provided. Specify a job number or URL.")
         return
 
-    from candidate_profile import SALARY_REGION_HINT
+    from jobfinder.config.profile import SALARY_REGION_HINT
 
     system_prompt = (
         "You are a compensation expert with deep knowledge of tech and climate-tech salaries "

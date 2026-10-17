@@ -14,8 +14,10 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-PROFILE_DIR = Path(os.getenv("WTTJ_PROFILE_DIR", ".jobfinder_wttj_profile"))
-CAPTURE_FILE = Path(".jobfinder_wttj_capture.jsonl")
+from jobfinder.config.paths import PROJECT_ROOT
+
+PROFILE_DIR = Path(os.getenv("WTTJ_PROFILE_DIR") or PROJECT_ROOT / ".jobfinder_wttj_profile")
+CAPTURE_FILE = PROJECT_ROOT / ".jobfinder_wttj_capture.jsonl"
 APP_URL = "https://app.welcometothejungle.com/jobs"
 _STATIC_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp", ".woff", ".woff2")
 _NOISE_HOSTS = ("google", "gstatic", "doubleclick", "segment", "sentry", "datadog", "amplitude")

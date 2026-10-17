@@ -22,7 +22,7 @@ import os
 import requests
 from dotenv import load_dotenv
 
-from candidate_profile import CANDIDATE_PROFILE, FIT_RUBRIC
+from jobfinder.config.profile import CANDIDATE_PROFILE, FIT_RUBRIC
 
 load_dotenv()
 

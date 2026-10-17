@@ -15,9 +15,10 @@ import sys
 
 from dotenv import load_dotenv
 
+from jobfinder.config.paths import PROJECT_ROOT
 from jobfinder.documents.doc_text import SUPPORTED_EXTENSIONS, SUPPORTED_LABEL, extract_text
 
-_project_root = os.path.dirname(os.path.abspath(__file__))
+_project_root = str(PROJECT_ROOT)
 PROFILE_PATH = os.path.join(_project_root, "profile.json")
 STYLE_GUIDE_PATH = os.path.join(_project_root, "Cover-letter styleguide.md")
 ENV_PATH = os.path.join(_project_root, ".env")
@@ -478,7 +479,7 @@ def run_setup() -> bool:
     print("privacy → Get a copy of your data → Connections).")
     export = _input("Path to Connections.csv (Enter to skip)")
     if export:
-        from connections import import_connections
+        from jobfinder.sources.connections import import_connections
 
         try:
             import_connections(export)

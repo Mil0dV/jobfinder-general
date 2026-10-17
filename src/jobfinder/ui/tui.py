@@ -30,8 +30,8 @@ from agent import (
     save_jobs,
     search_jobs,
 )
-from candidate_profile import is_pearl
 from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.config.profile import is_pearl
 
 _SOURCE_NAMES = [fn.__name__.removeprefix("search_") for fn in ALL_SOURCES]
 
@@ -772,7 +772,7 @@ def swipe_screen(term, deck, decisions):
             )
         elif key == "a":
             with term.suspend():
-                from cli import _run_interactive
+                from jobfinder.cli import _run_interactive
 
                 try:
                     _run_interactive(initial_job=job)
@@ -1086,7 +1086,7 @@ def run_tui():
                     continue
                 query = role
             if choice == 2:  # companies where you know someone
-                from connections import CONNECTIONS_CSV, search_connections
+                from jobfinder.sources.connections import CONNECTIONS_CSV, search_connections
 
                 if not os.path.exists(CONNECTIONS_CSV):
                     cols = term.size()[0]

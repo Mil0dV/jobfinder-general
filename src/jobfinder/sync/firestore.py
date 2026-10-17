@@ -109,7 +109,7 @@ def _ts_rank(ts) -> str:
     try:
         from zoneinfo import ZoneInfo
 
-        from candidate_profile import TIMEZONE
+        from jobfinder.config.profile import TIMEZONE
     except Exception:
         ZoneInfo, TIMEZONE = None, None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
