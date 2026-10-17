@@ -21,17 +21,12 @@ import time
 import tty
 from contextlib import contextmanager
 
-from agent import (
-    ALL_SOURCES,
-    PREFERRED_LOCATION,
-    PROFILE_QUERY,
-    get_company_info,
-    home_policy_summary,
-    save_jobs,
-    search_jobs,
-)
+from jobfinder.agent.tools import get_company_info
 from jobfinder.config.paths import PROJECT_ROOT
 from jobfinder.config.profile import is_pearl
+from jobfinder.pipeline.search import ALL_SOURCES, search_jobs
+from jobfinder.pipeline.store import save_jobs
+from jobfinder.sources.base import PREFERRED_LOCATION, PROFILE_QUERY, home_policy_summary
 
 _SOURCE_NAMES = [fn.__name__.removeprefix("search_") for fn in ALL_SOURCES]
 

@@ -535,7 +535,7 @@ def sync_down(verbose: bool = False) -> bool:
             _save_local_decisions(local)
 
         # Jobs: append remote rows jobs.csv doesn't know (save_jobs dedupes by URL).
-        from agent import save_jobs
+        from jobfinder.pipeline.store import save_jobs
 
         remote_jobs = sync.pull_jobs()
         result = save_jobs(remote_jobs, _push=False) if remote_jobs else {"added": 0}

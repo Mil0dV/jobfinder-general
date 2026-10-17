@@ -37,6 +37,9 @@ packages = ["src/jobfinder"]
 line-length = 100
 target-version = "py310"
 
+[project.scripts]
+jobfinder = "jobfinder.cli:main"
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]

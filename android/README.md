@@ -31,7 +31,7 @@ as a phone app, plus a share target for job URLs.
 - **Cross-device sync** (`data/Sync.kt`, optional) — mirrors jobs, swipe
   decisions, and fetched descriptions to Cloud Firestore (Firebase SDK: Auth
   email/password + Firestore, project config in `app/google-services.json`),
-  shared with the laptop's CLI/TUI (`sync.py` in the repo root), so nothing is
+  shared with the laptop's CLI/TUI (`src/jobfinder/sync/firestore.py` in the repo root), so nothing is
   judged twice. Two-way merge on app start (summary line on the menu), instant
   pushes on swipe/undo/search/share. Fill `FIREBASE_EMAIL`/`FIREBASE_PASSWORD`
   in `Keys.kt` with the same values as the repo's `.env`; blank = sync off.

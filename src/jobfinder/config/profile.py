@@ -1,6 +1,6 @@
 """Candidate target-role profile: what counts as a "fit" job.
 
-Central definition used by agent.py for title matching (regex families),
+Central definition used by the search pipeline for title matching (regex families),
 API query seeding, location matching, and LLM validation. Values are loaded
 from profile.json (written by `cli.py --setup`, gitignored) when present;
 without it, the built-in defaults below apply unchanged. Set JOBFINDER_PROFILE
@@ -63,7 +63,7 @@ _DEFAULT_QUERY_SEEDS = [
     "entrepreneur in residence",
 ]
 
-# How the LLM validator anchors the 0-5 "fit" scale (see agent.validate_jobs_batch).
+# How the LLM validator anchors the 0-5 "fit" scale (see pipeline.validate.validate_jobs_batch).
 _DEFAULT_FIT_RUBRIC = {
     "criteria": "hands-on technical focus, product/vision ownership, and team leadership",
     "five": "exact target role at right seniority (e.g. Head of Product, CTO, Founding Engineer,\n"
@@ -73,7 +73,7 @@ _DEFAULT_FIT_RUBRIC = {
     "zero": "wrong role family (sales, marketing, hardware/mechanical, junior roles, internships)",
 }
 
-# Location machinery defaults (consumed by agent.py).
+# Location machinery defaults (consumed by the search pipeline).
 _DEFAULT_COUNTRY_TERMS = {
     "germany": [
         "germany",
@@ -140,7 +140,7 @@ _DEFAULT_CLIMATEBASE_COUNTRIES = {
 }
 
 # Where the candidate will work, and on what terms (the "my locations" search policy,
-# consumed by agent.py). Per country, in match-priority order:
+# consumed by the search pipeline). Per country, in match-priority order:
 #   mode "any"              on-site, hybrid and remote are all fine
 #   mode "hybrid_or_remote" hybrid/remote fine; dropped only on an explicit on-site-only signal
 #   mode "remote_only"      fully remote only, except hybrid in `hybrid_cities` (commutable);
@@ -227,7 +227,7 @@ PROFILE_QUERY_SEEDS = _config.get("query_seeds") or _DEFAULT_QUERY_SEEDS
 # Anchors for the LLM validator's 0-5 fit scale.
 FIT_RUBRIC = {**_DEFAULT_FIT_RUBRIC, **(_config.get("fit_rubric_examples") or {})}
 
-# Location machinery (consumed by agent.py's source searchers).
+# Location machinery (consumed by the source searchers).
 COUNTRY_TERMS = _locations.get("country_terms") or _DEFAULT_COUNTRY_TERMS
 ADZUNA_COUNTRIES = _locations.get("adzuna_countries") or _DEFAULT_ADZUNA_COUNTRIES
 ADZUNA_DEFAULT = (

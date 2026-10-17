@@ -28,7 +28,7 @@ ADZUNA_APP_ID=...           # Optional — adds more job results
 ADZUNA_API_KEY=...
 ```
 
-> **Note:** `sync.py` (cross-device Firestore sync), the `android/` app, `.firebaserc`,
+> **Note:** `src/jobfinder/sync/firestore.py` (cross-device Firestore sync), the `android/` app, `.firebaserc`,
 > and `firestore.rules` are the author's personal setup. Sync is a silent no-op unless
 > you configure `FIREBASE_*` variables in `.env` pointing at your own Firebase project.
 
@@ -230,14 +230,18 @@ I've spent the last few years building tools that cut carbon at scale...
 ## Project Structure
 
 ```
-├── cli.py              # Entry point: argparse CLI + interactive loop
-├── setup_wizard.py     # First-run setup: resume import + profile generation
-├── agent.py            # Claude agent loop + all job search tools
-├── connections.py      # LinkedIn network search: export → companies → their job boards
-├── candidate_profile.py # Loads profile.json (falls back to built-in defaults)
-├── cover_letter.py     # Cover letter & question generation (Anthropic/Claude)
-├── resume_tailor.py    # Resume tailoring (Anthropic/Claude) → styled docx/PDF
-├── resume_data.py      # Loads Resume_base.<docx|pdf|txt> → structured resume.json (cached)
+├── cli.py              # Launcher → jobfinder.cli (also: python -m jobfinder)
+├── src/jobfinder/
+│   ├── cli.py          # argparse CLI + interactive shell
+│   ├── config/         # profile.json loader, first-run setup wizard, PROJECT_ROOT
+│   ├── llm/            # LLM client (Anthropic / OpenRouter / local rig)
+│   ├── sources/        # One module per job board + LinkedIn network search
+│   ├── pipeline/       # search → dedup → validate → rank → jobs.csv
+│   ├── agent/          # Claude tool-use agent loop
+│   ├── documents/      # Cover letters, resume tailoring, resume loading
+│   ├── sync/           # Optional Firestore cross-device sync
+│   ├── ui/             # Full-screen TUI
+│   └── migrations/     # One-off data migrations
 ├── styleguide_default.md # Neutral cover-letter style, used without a personal one
 ├── profile.json        # Your search profile, written by --setup (gitignored)
 ├── jobs.csv            # Output: accumulated job results (gitignored)
@@ -258,7 +262,7 @@ I've spent the last few years building tools that cut carbon at scale...
 >   (No resume file? Copy `resume.json.example` → `resume.json` and edit it directly.)
 > - `Cover-letter styleguide.md.example` → `Cover-letter styleguide.md` (paste a few of
 >   your own cover letters so Claude matches your voice)
-> - Write `profile.json` following the field names in `candidate_profile.py`
+> - Write `profile.json` following the field names in `src/jobfinder/config/profile.py`
 
 ## CLI Reference
 

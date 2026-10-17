@@ -3,10 +3,10 @@
 
 Climatebase's `how_to_apply` field stores whatever the "Apply" button links to,
 which is often the application form rather than the posting — see
-agent.py's `_strip_apply_suffix`. Rows already in jobs.csv from before that fix
+pipeline/search.py's `_strip_apply_suffix`. Rows already in jobs.csv from before that fix
 existed still carry the form URL. Idempotent — re-running is a no-op.
 
-`push_jobs` is a per-key upsert (agent.py's `job_key` = company|title), so
+`push_jobs` is a per-key upsert (pipeline/search.py's `job_key` = company|title), so
 pushing the corrected rows overwrites the existing Firestore docs in place —
 that's what fixes the URL for the Android app / other synced devices, since a
 plain `sync_up()` only pushes keys the remote DB doesn't already have.
@@ -19,7 +19,7 @@ plain `sync_up()` only pushes keys the remote DB doesn't already have.
 import csv
 import sys
 
-from agent import _strip_apply_suffix
+from jobfinder.sources.climatebase import _strip_apply_suffix
 
 JOBS_CSV = "jobs.csv"
 

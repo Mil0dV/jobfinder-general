@@ -13,7 +13,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from agent import root_agent, run_profile_search
+from jobfinder.agent.loop import root_agent
 from jobfinder.config.paths import PROJECT_ROOT
 from jobfinder.documents.cover_letter import (
     answer_application_question,
@@ -28,6 +28,7 @@ from jobfinder.documents.cover_letter import (
     parse_command,
 )
 from jobfinder.documents.resume_tailor import tailor_resume
+from jobfinder.pipeline.runs import run_profile_search
 
 
 def run_search(job_title: str, location: str, job_type: str, experience: str):
@@ -212,7 +213,7 @@ def _register_url_job(url: str, role_desc: str):
         company, title = extract_job_meta(role_desc)
         from datetime import date
 
-        from agent import save_jobs
+        from jobfinder.pipeline.store import save_jobs
 
         job = {
             "title": title,
@@ -239,7 +240,7 @@ def _register_pasted_job(role_desc: str, company: str, title: str) -> dict | Non
     try:
         from datetime import date
 
-        from agent import save_jobs
+        from jobfinder.pipeline.store import save_jobs
 
         job = {
             "title": title,
@@ -572,7 +573,7 @@ def _drop_offline(jobs: list) -> list:
     """Check that queued jobs are still online; report and drop the dead ones."""
     if not jobs:
         return jobs
-    from agent import verify_jobs_online
+    from jobfinder.pipeline.verify import verify_jobs_online
 
     print(f"   Checking that {len(jobs)} liked job(s) are still online...")
     kept, dropped = verify_jobs_online(jobs, check_all=True)
@@ -1473,7 +1474,7 @@ def main():
         return
 
     if args.connections:
-        from agent import run_connection_search
+        from jobfinder.pipeline.runs import run_connection_search
 
         print("=" * 70)
         print("🤝 Climate & Green Tech Job Finder — LinkedIn network search")

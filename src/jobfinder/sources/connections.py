@@ -14,7 +14,7 @@ Four stages, each disk-cached so the slow first run happens only once:
                            (connections_boards.json, with a TTL).
 
 ``search_connections`` has the same ``(query, location)`` signature as every
-other source in ``agent.ALL_SOURCES``, so the usual pipeline (dedup, liveness,
+other source in ``pipeline.search.ALL_SOURCES``, so the usual pipeline (dedup, liveness,
 description fetch, LLM validation, ranking) applies unchanged.
 """
 
@@ -27,16 +27,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from agent import (
-    VALIDATION_MODEL,
-    _get_anthropic_client,
-    _location_terms,
-    _make_job,
-    _matches_location,
-    _strip_apply_suffix,
-    _title_matches,
-)
 from jobfinder.config.paths import PROJECT_ROOT
+from jobfinder.pipeline.validate import VALIDATION_MODEL, _get_anthropic_client
+from jobfinder.sources.base import _location_terms, _make_job, _matches_location, _title_matches
+from jobfinder.sources.climatebase import _strip_apply_suffix
 
 BASE_DIR = str(PROJECT_ROOT)
 CONNECTIONS_CSV = os.path.join(BASE_DIR, "connections.csv")

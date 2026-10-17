@@ -1,4 +1,5 @@
 """Tests for the TUI decision store: tombstone-aware read/write round-trip."""
+
 import json
 
 import pytest
@@ -24,10 +25,14 @@ def test_undo_writes_tombstone_and_live_dict_stays_clean(decisions_file):
 
 
 def test_load_decisions_hides_tombstones(decisions_file):
-    decisions_file.write_text(json.dumps({
-        "a": {"decision": "yes"},
-        "b": {"decision": "deleted"},
-    }))
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "a": {"decision": "yes"},
+                "b": {"decision": "deleted"},
+            }
+        )
+    )
     loaded = tui.load_decisions()
     assert list(loaded) == ["a"]
 

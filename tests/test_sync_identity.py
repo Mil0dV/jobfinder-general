@@ -1,12 +1,11 @@
 """Tests for the cross-device identity, decision-merge and description-key layer."""
-import hashlib
 
-import pytest
+import hashlib
 
 import jobfinder.sync.firestore as sync
 
-
 # --- identity keys ----------------------------------------------------------------
+
 
 def test_norm_key_company_title_first():
     assert sync.norm_key("https://x.io/j/1", "Acme", "Product Lead") == "acme|product lead"
@@ -44,6 +43,7 @@ def test_description_key_matches_across_push_and_read():
 
 # --- tombstones -------------------------------------------------------------------
 
+
 def test_tombstone_shape():
     t = sync.tombstone()
     assert sync.is_tombstone(t)
@@ -72,6 +72,7 @@ def test_push_decision_writes_tombstone_instead_of_delete():
 
 # --- timestamp comparison ----------------------------------------------------------
 
+
 def test_ts_rank_normalizes_legacy_local_strings():
     legacy = sync._ts_rank("2026-10-12 18:40")
     assert legacy == "2026-10-12T16:40:00Z"  # Europe/Zurich = UTC+2 on that date
@@ -88,6 +89,7 @@ def test_ts_rank_orders_across_timezones():
 
 
 # --- sync_down merge (fake sync client, no network) ---------------------------------
+
 
 class FakeSync:
     def __init__(self, remote_decisions):
@@ -109,9 +111,9 @@ def _run_merge(monkeypatch, tmp_path, local, remote):
     monkeypatch.setattr(sync, "DECISIONS_FILE", str(decisions_file))
     monkeypatch.setattr(sync, "REPLIES_FILE", str(tmp_path / "replies.json"))
     monkeypatch.setattr(sync, "get_sync", lambda: FakeSync(remote))
-    import agent  # sync_down imports save_jobs from agent
+    import jobfinder.pipeline.store as store  # sync_down imports save_jobs from store
 
-    monkeypatch.setattr(agent, "save_jobs", lambda jobs, _push=True: {"added": 0})
+    monkeypatch.setattr(store, "save_jobs", lambda jobs, _push=True: {"added": 0})
     assert sync.sync_down() is True
     return __import__("json").loads(decisions_file.read_text())
 
@@ -121,7 +123,14 @@ def test_newer_remote_decision_wins(monkeypatch, tmp_path):
         monkeypatch,
         tmp_path,
         local={"acme|x": {"decision": "no", "ts": "2026-10-12T10:00:00Z"}},
-        remote={"acme|x": {"decision": "yes", "company": "Acme", "title": "X", "ts": "2026-10-12T12:00:00Z"}},
+        remote={
+            "acme|x": {
+                "decision": "yes",
+                "company": "Acme",
+                "title": "X",
+                "ts": "2026-10-12T12:00:00Z",
+            }
+        },
     )
     assert merged["acme|x"]["decision"] == "yes"
 
